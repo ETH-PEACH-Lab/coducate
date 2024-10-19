@@ -23,23 +23,47 @@ class DisposableWebSocket {
     private setupVSCodeListeners() {
         if (vscode.window.activeTextEditor) {
             const document = vscode.window.activeTextEditor.document;
-            this.syncDocumentToYDoc(document);
+            this.syncDocumentToYDoc(document); // Sync initial document content
         }
 
         vscode.workspace.onDidChangeTextDocument((event) => {
-            this.syncDocumentToYDoc(event.document);
+            if (event.document === vscode.window.activeTextEditor?.document) {
+                this.applyIncrementalChanges(event.contentChanges);
+            }
         });
 
         vscode.workspace.onDidOpenTextDocument((document) => {
-            this.syncDocumentToYDoc(document);
+            this.syncDocumentToYDoc(document); // Sync document content on open
         });
     }
 
-    public syncDocumentToYDoc(document: vscode.TextDocument) {
+    // Accept readonly array of content changes from VS Code
+    private applyIncrementalChanges(
+        contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
+    ) {
+        contentChanges.forEach((change) => {
+            const start = change.rangeOffset;
+            const length = change.rangeLength;
+
+            if (length > 0) {
+                // If there are characters to delete, remove them from yText
+                this.yText.delete(start, length);
+            }
+
+            if (change.text.length > 0) {
+                // If there are characters to insert, add them at the appropriate position
+                this.yText.insert(start, change.text);
+            }
+        });
+        console.log("Incremental changes applied to Yjs document");
+    }
+
+    // Sync entire document initially (e.g., when opening a file)
+    private syncDocumentToYDoc(document: vscode.TextDocument) {
         const codeContent = document.getText();
-        this.yText.delete(0, this.yText.length);
-        this.yText.insert(0, codeContent);
-        console.log("VS Code document content synced to Yjs");
+        this.yText.delete(0, this.yText.length); // Clear the existing content in yText
+        this.yText.insert(0, codeContent); // Insert the current VS Code document content
+        console.log("VS Code entire document content synced to Yjs");
     }
 
     public dispose() {
