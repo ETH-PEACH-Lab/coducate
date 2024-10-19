@@ -2,19 +2,21 @@ import * as vscode from "vscode";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 
+const serverWsUrl = "ws://localhost:1234";
+
 class DisposableWebSocket {
     private provider: WebsocketProvider;
-    private text: Y.Text;
+    private yText: Y.Text;
 
     constructor(url: string) {
-        const doc = new Y.Doc();
+        const yDoc = new Y.Doc();
 
         // Use 'ws' directly as the WebSocketPolyfill
-        this.provider = new WebsocketProvider(url, "roomId", doc, {
+        this.provider = new WebsocketProvider(url, "roomId", yDoc, {
             WebSocketPolyfill: require("ws"),
         });
 
-        this.text = doc.getText("monaco");
+        this.yText = yDoc.getText("monaco");
         this.setupVSCodeListeners();
     }
 
@@ -35,8 +37,8 @@ class DisposableWebSocket {
 
     public syncDocumentToYDoc(document: vscode.TextDocument) {
         const codeContent = document.getText();
-        this.text.delete(0, this.text.length);
-        this.text.insert(0, codeContent);
+        this.yText.delete(0, this.yText.length);
+        this.yText.insert(0, codeContent);
         console.log("VS Code document content synced to Yjs");
     }
 
@@ -49,7 +51,7 @@ class DisposableWebSocket {
 export function activate(context: vscode.ExtensionContext) {
     console.log("Your extension is now active!");
 
-    const ws = new DisposableWebSocket("ws://localhost:1234"); // Same URL as used in App.tsx
+    const ws = new DisposableWebSocket(serverWsUrl); // Same URL as used in App.tsx
     context.subscriptions.push(ws);
 }
 
