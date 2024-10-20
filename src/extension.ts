@@ -3,6 +3,7 @@ import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 
 const serverWsUrl = "ws://localhost:1234";
+let disposableWebSocket: DisposableWebSocket | undefined;
 
 class DisposableWebSocket {
     private provider: WebsocketProvider;
@@ -11,7 +12,6 @@ class DisposableWebSocket {
     constructor(url: string, context: vscode.ExtensionContext) {
         const yDoc = new Y.Doc();
 
-        // If no clientId exists in globalState, we'll store the first one created
         this.provider = new WebsocketProvider(url, "roomId", yDoc, {
             WebSocketPolyfill: require("ws"),
         });
@@ -66,7 +66,6 @@ class DisposableWebSocket {
     private syncDocumentToYDoc(document: vscode.TextDocument) {
         const codeContent = document.getText();
         this.yText.delete(0, this.yText.length);
-        this.yText.insert(0, codeContent);
         console.log("VS Code entire document content synced to Yjs");
     }
 
@@ -76,13 +75,58 @@ class DisposableWebSocket {
     }
 }
 
-export function activate(context: vscode.ExtensionContext) {
-    console.log("Your extension is now active!");
+// Create a status bar item
+const status = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+);
+status.text = "$(sync-ignored) Live Coding";
+status.color = "#fff";
+status.show();
 
-    const ws = new DisposableWebSocket(serverWsUrl, context);
-    context.subscriptions.push(ws);
+export function activate(context: vscode.ExtensionContext) {
+    status.text = "$(sync-ignored) Live Coding";
+
+    const startCommand = vscode.commands.registerCommand(
+        "live-coding.startLiveCoding",
+        () => {
+            if (!disposableWebSocket) {
+                disposableWebSocket = new DisposableWebSocket(
+                    serverWsUrl,
+                    context
+                );
+                context.subscriptions.push(disposableWebSocket);
+                status.text = "$(sync) Live Coding";
+                console.log("Live coding session started.");
+            } else {
+                console.log("Live coding session is already running.");
+            }
+        }
+    );
+
+    const endCommand = vscode.commands.registerCommand(
+        "live-coding.endLiveCoding",
+        () => {
+            if (disposableWebSocket) {
+                disposableWebSocket.dispose();
+                disposableWebSocket = undefined;
+                status.text = "$(sync-ignored) Live Coding"; // Update status bar to inactive state
+                console.log("Live coding session ended.");
+            } else {
+                console.log("No live coding session is running.");
+            }
+        }
+    );
+
+    context.subscriptions.push(startCommand);
+    context.subscriptions.push(endCommand);
 }
 
 export function deactivate() {
+    if (disposableWebSocket) {
+        disposableWebSocket.dispose();
+        disposableWebSocket = undefined;
+    }
+    status.text = "$(sync-ignored) Live Coding"; // Reset status bar to default when deactivated
     console.log("Extension is now deactivated.");
 }

@@ -1,7 +1,7 @@
 {
     "name": "live-coding",
     "displayName": "Live Coding",
-    "description": "",
+    "description": "An extension for live coding sessions.",
     "version": "0.0.1",
     "engines": {
         "vscode": "^1.94.0"
@@ -10,14 +10,18 @@
         "Other"
     ],
     "activationEvents": [
-        "workspaceContains:**/*"
+        "onStartupFinished"
     ],
     "main": "./dist/extension.js",
     "contributes": {
         "commands": [
             {
-                "command": "live-coding.helloWorld",
-                "title": "Hello World"
+                "command": "live-coding.startLiveCoding",
+                "title": "Start Live Coding"
+            },
+            {
+                "command": "live-coding.endLiveCoding",
+                "title": "End Live Coding"
             }
         ]
     },
