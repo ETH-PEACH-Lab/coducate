@@ -17,11 +17,19 @@
         "commands": [
             {
                 "command": "live-coding.startLiveCoding",
-                "title": "Start Live Coding"
+                "title": "Live Coding: Start Session"
             },
             {
                 "command": "live-coding.endLiveCoding",
-                "title": "End Live Coding"
+                "title": "Live Coding: End Session"
+            },
+            {
+                "command": "live-coding.hideCode",
+                "title": "Live Coding: Hide Code"
+            },
+            {
+                "command": "live-coding.showCode",
+                "title": "Live Coding: Show Code"
             }
         ]
     },
