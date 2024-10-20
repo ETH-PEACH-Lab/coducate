@@ -84,6 +84,114 @@ status.text = "$(sync-ignored) Live Coding";
 status.color = "#fff";
 status.show();
 
+// CodeLens Provider for hiding code
+class HideCodeLensProvider implements vscode.CodeLensProvider {
+    private hiddenCodeMap: Map<vscode.Range, string> = new Map(); // Track hidden ranges and their code
+    private decorations: vscode.TextEditorDecorationType[] = [];
+
+    public provideCodeLenses(
+        document: vscode.TextDocument,
+        token: vscode.CancellationToken
+    ): vscode.CodeLens[] {
+        const lenses: vscode.CodeLens[] = [];
+
+        this.hiddenCodeMap.forEach((_, range) => {
+            lenses.push(
+                new vscode.CodeLens(range, {
+                    title: "Show Hidden Code",
+                    command: "live-coding.showCode",
+                    arguments: [range],
+                })
+            );
+        });
+
+        return lenses;
+    }
+
+    public hideCode(
+        range: vscode.Range,
+        code: string,
+        editor: vscode.TextEditor
+    ) {
+        this.hiddenCodeMap.set(range, code);
+
+        // Create a decoration to indicate hidden code
+        const decoration = vscode.window.createTextEditorDecorationType({
+            after: {
+                contentText: "/* Hidden Code */",
+                color: "#999999",
+                fontStyle: "italic",
+            },
+        });
+
+        editor.setDecorations(decoration, [range]);
+        this.decorations.push(decoration);
+    }
+
+    public showCode(range: vscode.Range): string | undefined {
+        const code = this.hiddenCodeMap.get(range);
+        this.hiddenCodeMap.delete(range);
+        return code;
+    }
+
+    // Getter method to access the hidden code
+    public getHiddenCode(range: vscode.Range): string | undefined {
+        return this.hiddenCodeMap.get(range);
+    }
+
+    // Method to retrieve all hidden ranges
+    public getHiddenRanges(): vscode.Range[] {
+        return Array.from(this.hiddenCodeMap.keys());
+    }
+
+    public clearDecorations(editor: vscode.TextEditor) {
+        this.decorations.forEach((decoration) => {
+            editor.setDecorations(decoration, []);
+        });
+        this.decorations = [];
+    }
+}
+
+// HoverProvider for previewing hidden code on hover
+class HideCodeHoverProvider implements vscode.HoverProvider {
+    private hideCodeLensProvider: HideCodeLensProvider;
+
+    constructor(hideCodeLensProvider: HideCodeLensProvider) {
+        this.hideCodeLensProvider = hideCodeLensProvider;
+    }
+
+    provideHover(
+        document: vscode.TextDocument,
+        position: vscode.Position,
+        token: vscode.CancellationToken
+    ): vscode.ProviderResult<vscode.Hover> {
+        for (const range of this.hideCodeLensProvider.getHiddenRanges()) {
+            if (range.contains(position)) {
+                const hiddenCode =
+                    this.hideCodeLensProvider.getHiddenCode(range);
+                if (hiddenCode) {
+                    const preview =
+                        hiddenCode.length > 100
+                            ? hiddenCode.substring(0, 100) + "..."
+                            : hiddenCode;
+                    return new vscode.Hover(
+                        new vscode.MarkdownString(
+                            "```" +
+                                document.languageId +
+                                "\n" +
+                                preview +
+                                "\n```"
+                        )
+                    );
+                }
+            }
+        }
+        return null;
+    }
+}
+
+const hideCodeLensProvider = new HideCodeLensProvider();
+
 export function activate(context: vscode.ExtensionContext) {
     status.text = "$(sync-ignored) Live Coding";
 
@@ -118,8 +226,82 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
-    context.subscriptions.push(startCommand);
-    context.subscriptions.push(endCommand);
+    // Command to hide selected code
+    const hideCodeCommand = vscode.commands.registerCommand(
+        "live-coding.hideCode",
+        () => {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const selection = editor.selection;
+                if (!selection.isEmpty) {
+                    // Create a range that includes entire lines, not just the selection
+                    const startLine = selection.start.line;
+                    const endLine = selection.end.line;
+
+                    // Create a range that starts at the beginning of the first line and ends at the end of the last line
+                    const range = new vscode.Range(
+                        new vscode.Position(startLine, 0), // Beginning of the start line
+                        new vscode.Position(
+                            endLine,
+                            editor.document.lineAt(endLine).range.end.character
+                        ) // End of the last line
+                    );
+
+                    const selectedCode = editor.document.getText(range);
+
+                    hideCodeLensProvider.hideCode(range, selectedCode, editor);
+
+                    editor.edit((editBuilder) => {
+                        editBuilder.delete(range); // Remove the entire lines from the editor
+                    });
+                    console.log("Code hidden");
+                } else {
+                    vscode.window.showInformationMessage("No code selected");
+                }
+            }
+        }
+    );
+
+    // Command to show hidden code
+    const showCodeCommand = vscode.commands.registerCommand(
+        "live-coding.showCode",
+        (range: vscode.Range) => {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const hiddenCode = hideCodeLensProvider.showCode(range);
+                if (hiddenCode) {
+                    editor.edit((editBuilder) => {
+                        editBuilder.insert(range.start, hiddenCode); // Insert the hidden code back
+                    });
+                    hideCodeLensProvider.clearDecorations(editor); // Clear any remaining decorations
+                    console.log("Code revealed");
+                } else {
+                    vscode.window.showInformationMessage("No code to reveal");
+                }
+            }
+        }
+    );
+
+    context.subscriptions.push(
+        startCommand,
+        endCommand,
+        hideCodeCommand,
+        showCodeCommand
+    );
+
+    // Register CodeLens Provider
+    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
+        "*",
+        hideCodeLensProvider
+    );
+    context.subscriptions.push(codeLensDisposable);
+
+    // Register Hover Provider for previewing hidden code
+    const hoverProviderDisposable = vscode.languages.registerHoverProvider(
+        "*",
+        new HideCodeHoverProvider(hideCodeLensProvider)
+    );
+    context.subscriptions.push(hoverProviderDisposable);
 }
 
 export function deactivate() {
