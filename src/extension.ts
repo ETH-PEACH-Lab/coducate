@@ -7,71 +7,102 @@ let disposableWebSocket: DisposableWebSocket | undefined;
 
 class DisposableWebSocket {
     private provider: WebsocketProvider;
-    private yText: Y.Text;
+    private yDoc: Y.Doc;
+    private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
 
-    constructor(url: string, context: vscode.ExtensionContext) {
-        const yDoc = new Y.Doc();
-
-        this.provider = new WebsocketProvider(url, "roomId", yDoc, {
+    constructor(url: string, roomId: string) {
+        this.yDoc = new Y.Doc();
+        this.provider = new WebsocketProvider(url, roomId, this.yDoc, {
             WebSocketPolyfill: require("ws"),
         });
 
-        const awareness = this.provider.awareness;
+        // Initialize the shared file list in the Y.Doc
+        this.fileYMap = this.yDoc.getMap("fileYMap");
 
-        this.yText = yDoc.getText("monaco");
+        // Sync initial files from the workspace
+        this.setupFileSync();
+
         this.setupVSCodeListeners();
+    }
+
+    // Function to gather files and add them to the shared Yjs map
+    private async setupFileSync() {
+        const files = await vscode.workspace.findFiles("**/*"); // Get all files in the workspace
+        files.forEach(async (file) => {
+            const filePath = file.fsPath;
+
+            // Create a new Y.Text for each file if it doesn't exist yet
+            if (!this.fileYMap.has(filePath)) {
+                const yText = new Y.Text();
+                this.fileYMap.set(filePath, yText);
+
+                // Open the file and sync its content to Y.Text
+                const document = await vscode.workspace.openTextDocument(
+                    filePath
+                );
+                const content = document.getText();
+
+                // Populate Y.Text with the file's content
+                yText.insert(0, content);
+            }
+        });
     }
 
     private setupVSCodeListeners() {
         if (vscode.window.activeTextEditor) {
             const document = vscode.window.activeTextEditor.document;
-            console.log("DOC SYNC: Active document found:", document.fileName);
-            this.syncDocumentToYDoc(document); // Sync initial document content
+            this.syncDocumentToYText(document.fileName, document.getText());
         }
 
         vscode.workspace.onDidChangeTextDocument((event) => {
             if (event.document === vscode.window.activeTextEditor?.document) {
-                console.log(
-                    "DOC SYNC: Document changed:",
-                    event.document.fileName
+                this.applyIncrementalChanges(
+                    event.document.fileName,
+                    event.contentChanges
                 );
-                this.applyIncrementalChanges(event.contentChanges);
             }
         });
 
         vscode.workspace.onDidOpenTextDocument((document) => {
-            console.log("DOC SYNC: Document opened:", document.fileName);
-            this.syncDocumentToYDoc(document); // Sync document content on open
+            this.syncDocumentToYText(document.fileName, document.getText());
         });
     }
 
+    private syncDocumentToYText(fileName: string, content: string) {
+        const yText = this.fileYMap.get(fileName);
+        if (!yText) {
+            return;
+        }
+
+        yText.delete(0, yText.length); // Clear existing content
+        yText.insert(0, content); // Insert new content
+    }
+
     private applyIncrementalChanges(
+        fileName: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
     ) {
+        const yText = this.fileYMap.get(fileName);
+        if (!yText) {
+            return;
+        }
+
         contentChanges.forEach((change) => {
             const start = change.rangeOffset;
             const length = change.rangeLength;
 
             if (length > 0) {
-                this.yText.delete(start, length);
+                yText.delete(start, length);
             }
 
             if (change.text.length > 0) {
-                this.yText.insert(start, change.text);
+                yText.insert(start, change.text);
             }
         });
-        console.log("Incremental changes applied to Yjs document");
-    }
-
-    private syncDocumentToYDoc(document: vscode.TextDocument) {
-        const codeContent = document.getText();
-        this.yText.delete(0, this.yText.length);
-        console.log("VS Code entire document content synced to Yjs");
     }
 
     public dispose() {
-        this.provider.disconnect();
-        console.log("WebSocket provider disposed.");
+        this.provider.destroy();
     }
 }
 
@@ -196,16 +227,30 @@ export function activate(context: vscode.ExtensionContext) {
     status.text = "$(sync-ignored) Live Coding";
 
     const startCommand = vscode.commands.registerCommand(
-        "live-coding.startLiveCoding",
+        "live-coding.startSession",
         () => {
+            // Generate a random roomId
+            const roomId = Math.random().toString(36).substring(2, 10);
+
             if (!disposableWebSocket) {
                 disposableWebSocket = new DisposableWebSocket(
                     serverWsUrl,
-                    context
+                    roomId
                 );
                 context.subscriptions.push(disposableWebSocket);
                 status.text = "$(sync) Live Coding";
                 console.log("Live coding session started.");
+                vscode.window.showInformationMessage(
+                    "Live coding session started. Room ID: " + roomId
+                );
+
+                // Show the roomId in the status bar, make it large on hover
+                status.tooltip = roomId;
+                status.command = {
+                    title: "Copy Room ID",
+                    command: "live-coding.copyRoomId",
+                    arguments: [roomId],
+                };
             } else {
                 console.log("Live coding session is already running.");
             }
@@ -213,7 +258,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     const endCommand = vscode.commands.registerCommand(
-        "live-coding.endLiveCoding",
+        "live-coding.endSession",
         () => {
             if (disposableWebSocket) {
                 disposableWebSocket.dispose();
@@ -240,11 +285,11 @@ export function activate(context: vscode.ExtensionContext) {
 
                     // Create a range that starts at the beginning of the first line and ends at the end of the last line
                     const range = new vscode.Range(
-                        new vscode.Position(startLine, 0), // Beginning of the start line
+                        new vscode.Position(startLine, 0),
                         new vscode.Position(
                             endLine,
                             editor.document.lineAt(endLine).range.end.character
-                        ) // End of the last line
+                        )
                     );
 
                     const selectedCode = editor.document.getText(range);
@@ -279,6 +324,15 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showInformationMessage("No code to reveal");
                 }
             }
+        }
+    );
+
+    // Command to copy the roomId to the clipboard
+    const copyRoomIdCommand = vscode.commands.registerCommand(
+        "live-coding.copyRoomId",
+        (roomId: string) => {
+            vscode.env.clipboard.writeText(roomId);
+            vscode.window.showInformationMessage("Room ID copied to clipboard");
         }
     );
 
