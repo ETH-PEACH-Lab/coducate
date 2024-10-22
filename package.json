@@ -1,6 +1,6 @@
 {
-    "name": "live-coding",
-    "displayName": "Live Coding",
+    "name": "coducate",
+    "displayName": "Coducate",
     "description": "An extension for live coding sessions.",
     "version": "0.0.1",
     "engines": {
@@ -16,24 +16,24 @@
     "contributes": {
         "commands": [
             {
-                "command": "live-coding.startSession",
-                "title": "Live Coding: Start Session"
+                "command": "coducate.startSession",
+                "title": "Coducate: Start Session"
             },
             {
-                "command": "live-coding.endSession",
-                "title": "Live Coding: End Session"
+                "command": "coducate.endSession",
+                "title": "Coducate: End Session"
             },
             {
-                "command": "live-coding.hideCode",
-                "title": "Live Coding: Hide Code"
+                "command": "coducate.hideCode",
+                "title": "Coducate: Hide Code"
             },
             {
-                "command": "live-coding.showCode",
-                "title": "Live Coding: Show Code"
+                "command": "coducate.showCode",
+                "title": "Coducate: Show Code"
             },
             {
-                "command": "live-coding.copyRoomId",
-                "title": "Live Coding: Copy Room ID"
+                "command": "coducate.copyRoomId",
+                "title": "Coducate: Copy Room ID"
             }
         ]
     },

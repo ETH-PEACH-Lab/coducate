@@ -92,7 +92,7 @@ const status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100
 );
-status.text = "$(sync-ignored) Live Coding";
+status.text = "$(sync-ignored) Coducate";
 status.color = "#fff";
 status.show();
 
@@ -111,7 +111,7 @@ class HideCodeLensProvider implements vscode.CodeLensProvider {
             lenses.push(
                 new vscode.CodeLens(range, {
                     title: "Show Hidden Code",
-                    command: "live-coding.showCode",
+                    command: "coducate.showCode",
                     arguments: [range],
                 })
             );
@@ -205,10 +205,10 @@ class HideCodeHoverProvider implements vscode.HoverProvider {
 const hideCodeLensProvider = new HideCodeLensProvider();
 
 export function activate(context: vscode.ExtensionContext) {
-    status.text = "$(sync-ignored) Live Coding";
+    status.text = "$(sync-ignored) Coducate";
 
     const startCommand = vscode.commands.registerCommand(
-        "live-coding.startSession",
+        "coducate.startSession",
         () => {
             // Generate a random roomId
             const roomId = Math.random().toString(36).substring(2, 10);
@@ -219,7 +219,7 @@ export function activate(context: vscode.ExtensionContext) {
                     roomId
                 );
                 context.subscriptions.push(disposableWebSocket);
-                status.text = "$(sync) Live Coding";
+                status.text = "$(sync) Coducate";
                 console.log("Live coding session started.");
                 vscode.window.showInformationMessage(
                     "Live coding session started. Room ID: " + roomId
@@ -229,7 +229,7 @@ export function activate(context: vscode.ExtensionContext) {
                 status.tooltip = roomId;
                 status.command = {
                     title: "Copy Room ID",
-                    command: "live-coding.copyRoomId",
+                    command: "coducate.copyRoomId",
                     arguments: [roomId],
                 };
             } else {
@@ -239,12 +239,12 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     const endCommand = vscode.commands.registerCommand(
-        "live-coding.endSession",
+        "coducate.endSession",
         () => {
             if (disposableWebSocket) {
                 disposableWebSocket.dispose();
                 disposableWebSocket = undefined;
-                status.text = "$(sync-ignored) Live Coding"; // Update status bar to inactive state
+                status.text = "$(sync-ignored) Coducate"; // Update status bar to inactive state
                 console.log("Live coding session ended.");
             } else {
                 console.log("No live coding session is running.");
@@ -254,7 +254,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command to hide selected code
     const hideCodeCommand = vscode.commands.registerCommand(
-        "live-coding.hideCode",
+        "coducate.hideCode",
         () => {
             const editor = vscode.window.activeTextEditor;
             if (editor) {
@@ -290,7 +290,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command to show hidden code
     const showCodeCommand = vscode.commands.registerCommand(
-        "live-coding.showCode",
+        "coducate.showCode",
         (range: vscode.Range) => {
             const editor = vscode.window.activeTextEditor;
             if (editor) {
@@ -310,7 +310,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command to copy the roomId to the clipboard
     const copyRoomIdCommand = vscode.commands.registerCommand(
-        "live-coding.copyRoomId",
+        "coducate.copyRoomId",
         (roomId: string) => {
             vscode.env.clipboard.writeText(roomId);
             vscode.window.showInformationMessage("Room ID copied to clipboard");
@@ -344,6 +344,6 @@ export function deactivate() {
         disposableWebSocket.dispose();
         disposableWebSocket = undefined;
     }
-    status.text = "$(sync-ignored) Live Coding"; // Reset status bar to default when deactivated
+    status.text = "$(sync-ignored) Coducate"; // Reset status bar to default when deactivated
     console.log("Extension is now deactivated.");
 }
