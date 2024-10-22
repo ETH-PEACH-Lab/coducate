@@ -49,11 +49,6 @@ class DisposableWebSocket {
     }
 
     private setupVSCodeListeners() {
-        if (vscode.window.activeTextEditor) {
-            const document = vscode.window.activeTextEditor.document;
-            this.syncDocumentToYText(document.fileName, document.getText());
-        }
-
         vscode.workspace.onDidChangeTextDocument((event) => {
             if (event.document === vscode.window.activeTextEditor?.document) {
                 this.applyIncrementalChanges(
@@ -62,20 +57,6 @@ class DisposableWebSocket {
                 );
             }
         });
-
-        vscode.workspace.onDidOpenTextDocument((document) => {
-            this.syncDocumentToYText(document.fileName, document.getText());
-        });
-    }
-
-    private syncDocumentToYText(fileName: string, content: string) {
-        const yText = this.fileYMap.get(fileName);
-        if (!yText) {
-            return;
-        }
-
-        yText.delete(0, yText.length); // Clear existing content
-        yText.insert(0, content); // Insert new content
     }
 
     private applyIncrementalChanges(
