@@ -25,16 +25,37 @@ class DisposableWebSocket {
         this.setupVSCodeListeners();
     }
 
+    private getRelativeFilePath(filePath: string): string {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+        if (workspaceFolder) {
+            const workspaceFolderPath = workspaceFolder.uri.fsPath;
+            const workspaceFolderName = workspaceFolder.name; // Get the name of the root folder
+
+            // Check if the filePath starts with the workspace path
+            if (filePath.startsWith(workspaceFolderPath)) {
+                const relativePath = filePath.substring(
+                    workspaceFolderPath.length + 1
+                ); // +1 to remove the leading slash
+                return `${workspaceFolderName}/${relativePath}`; // Prepend the workspace folder name to the relative path
+            }
+        }
+
+        // If no workspace is open or file path is outside, return the full path
+        return filePath;
+    }
+
     // Function to gather files and add them to the shared Yjs map
     private async setupFileSync() {
         const files = await vscode.workspace.findFiles("**/*"); // Get all files in the workspace
         files.forEach(async (file) => {
             const filePath = file.fsPath;
+            const relativeFilePath = this.getRelativeFilePath(filePath); // Use the helper function
 
             // Create a new Y.Text for each file if it doesn't exist yet
-            if (!this.fileYMap.has(filePath)) {
+            if (!this.fileYMap.has(relativeFilePath)) {
                 const yText = new Y.Text();
-                this.fileYMap.set(filePath, yText);
+                this.fileYMap.set(relativeFilePath, yText);
 
                 // Open the file and sync its content to Y.Text
                 const document = await vscode.workspace.openTextDocument(
@@ -63,7 +84,9 @@ class DisposableWebSocket {
         fileName: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
     ) {
-        const yText = this.fileYMap.get(fileName);
+        const relativeFileName = this.getRelativeFilePath(fileName); // Use the helper function
+
+        const yText = this.fileYMap.get(relativeFileName);
         if (!yText) {
             return;
         }
