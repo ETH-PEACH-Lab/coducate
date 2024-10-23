@@ -30,43 +30,45 @@ class DisposableWebSocket {
 
         if (workspaceFolder) {
             const workspaceFolderPath = workspaceFolder.uri.fsPath;
-            const workspaceFolderName = workspaceFolder.name; // Get the name of the root folder
+            const workspaceFolderName = workspaceFolder.name;
 
-            // Check if the filePath starts with the workspace path
             if (filePath.startsWith(workspaceFolderPath)) {
                 const relativePath = filePath.substring(
                     workspaceFolderPath.length + 1
-                ); // +1 to remove the leading slash
-                return `${workspaceFolderName}/${relativePath}`; // Prepend the workspace folder name to the relative path
+                );
+                return `${workspaceFolderName}/${relativePath}`;
             }
         }
 
-        // If no workspace is open or file path is outside, return the full path
         return filePath;
     }
 
     // Function to gather files and add them to the shared Yjs map
     private async setupFileSync() {
         const files = await vscode.workspace.findFiles("**/*"); // Get all files in the workspace
-        files.forEach(async (file) => {
+        for (const file of files) {
             const filePath = file.fsPath;
-            const relativeFilePath = this.getRelativeFilePath(filePath); // Use the helper function
+            const relativeFilePath = this.getRelativeFilePath(filePath);
 
-            // Create a new Y.Text for each file if it doesn't exist yet
-            if (!this.fileYMap.has(relativeFilePath)) {
-                const yText = new Y.Text();
-                this.fileYMap.set(relativeFilePath, yText);
+            // Check if it's a file, not a directory
+            const fileStat = await vscode.workspace.fs.stat(file);
+            if (fileStat.type === vscode.FileType.File) {
+                if (!this.fileYMap.has(relativeFilePath)) {
+                    const yText = new Y.Text();
+                    this.fileYMap.set(relativeFilePath, yText);
 
-                // Open the file and sync its content to Y.Text
-                const document = await vscode.workspace.openTextDocument(
-                    filePath
-                );
-                const content = document.getText();
+                    // Open the file and sync its content to Y.Text
+                    const document = await vscode.workspace.openTextDocument(
+                        filePath
+                    );
+                    const content = document.getText();
 
-                // Populate Y.Text with the file's content
-                yText.insert(0, content);
+                    yText.insert(0, content);
+                }
+            } else {
+                console.log(`Skipped folder: ${relativeFilePath}`);
             }
-        });
+        }
     }
 
     private setupVSCodeListeners() {
@@ -78,13 +80,54 @@ class DisposableWebSocket {
                 );
             }
         });
+
+        // Listen to file creation
+        vscode.workspace.onDidCreateFiles(async (event) => {
+            for (const file of event.files) {
+                const filePath = file.fsPath;
+                const relativeFilePath = this.getRelativeFilePath(filePath);
+
+                // Check if it's a file, not a directory
+                const fileStat = await vscode.workspace.fs.stat(file);
+                if (fileStat.type === vscode.FileType.File) {
+                    if (!this.fileYMap.has(relativeFilePath)) {
+                        const yText = new Y.Text();
+                        this.fileYMap.set(relativeFilePath, yText);
+
+                        const document =
+                            await vscode.workspace.openTextDocument(filePath);
+                        const content = document.getText();
+
+                        yText.insert(0, content);
+                        console.log(`File created: ${relativeFilePath}`);
+                    }
+                } else if (fileStat.type === vscode.FileType.Directory) {
+                    console.log(
+                        `Folder created: ${relativeFilePath} - Skipping`
+                    );
+                }
+            }
+        });
+
+        // Listen to file deletion
+        vscode.workspace.onDidDeleteFiles((event) => {
+            for (const file of event.files) {
+                const filePath = file.fsPath;
+                const relativeFilePath = this.getRelativeFilePath(filePath);
+
+                if (this.fileYMap.has(relativeFilePath)) {
+                    this.fileYMap.delete(relativeFilePath);
+                    console.log(`File deleted: ${relativeFilePath}`);
+                }
+            }
+        });
     }
 
     private applyIncrementalChanges(
         fileName: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
     ) {
-        const relativeFileName = this.getRelativeFilePath(fileName); // Use the helper function
+        const relativeFileName = this.getRelativeFilePath(fileName);
 
         const yText = this.fileYMap.get(relativeFileName);
         if (!yText) {
