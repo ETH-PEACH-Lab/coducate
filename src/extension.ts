@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
+import path from "path";
 
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
@@ -110,14 +111,35 @@ class DisposableWebSocket {
         });
 
         // Listen to file deletion
-        vscode.workspace.onDidDeleteFiles((event) => {
+        vscode.workspace.onDidDeleteFiles(async (event) => {
             for (const file of event.files) {
                 const filePath = file.fsPath;
                 const relativeFilePath = this.getRelativeFilePath(filePath);
 
-                if (this.fileYMap.has(relativeFilePath)) {
-                    this.fileYMap.delete(relativeFilePath);
-                    console.log(`File deleted: ${relativeFilePath}`);
+                // Check if any entries in fileYMap start with the folder path
+                const isFolder = Array.from(this.fileYMap.keys()).some((key) =>
+                    key.startsWith(relativeFilePath + path.sep)
+                );
+
+                if (isFolder) {
+                    // If it's a folder, delete all entries within that path
+                    console.log(`Folder deleted: ${relativeFilePath}`);
+                    for (const key of Array.from(this.fileYMap.keys())) {
+                        if (key.startsWith(relativeFilePath + path.sep)) {
+                            this.fileYMap.delete(key);
+                            console.log(
+                                `File deleted from folder in fileYMap: ${key}`
+                            );
+                        }
+                    }
+                } else {
+                    // If it's a single file, delete only that specific entry
+                    if (this.fileYMap.has(relativeFilePath)) {
+                        this.fileYMap.delete(relativeFilePath);
+                        console.log(
+                            `File deleted from fileYMap: ${relativeFilePath}`
+                        );
+                    }
                 }
             }
         });
