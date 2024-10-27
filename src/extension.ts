@@ -5,6 +5,7 @@ import path from "path";
 
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
+const ROOM_ID_KEY = "coducateRoomId";
 
 class DisposableWebSocket {
     private provider: WebsocketProvider;
@@ -27,21 +28,17 @@ class DisposableWebSocket {
     }
 
     private getRelativeFilePath(filePath: string): string {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        const workspaceFolder = vscode.workspace.workspaceFolders?.find(
+            (folder) => filePath.startsWith(folder.uri.fsPath)
+        );
 
         if (workspaceFolder) {
             const workspaceFolderPath = workspaceFolder.uri.fsPath;
-            const workspaceFolderName = workspaceFolder.name;
-
-            if (filePath.startsWith(workspaceFolderPath)) {
-                const relativePath = filePath.substring(
-                    workspaceFolderPath.length + 1
-                );
-                return `${workspaceFolderName}/${relativePath}`;
-            }
+            const relativePath = path.relative(workspaceFolderPath, filePath);
+            return `${workspaceFolder.name}/${relativePath}`;
         }
 
-        return filePath;
+        return filePath; // Return absolute path if file is not within any workspace folder
     }
 
     // Function to gather files and add them to the shared Yjs map
@@ -73,6 +70,29 @@ class DisposableWebSocket {
     }
 
     private setupVSCodeListeners() {
+        // Listen to workspace folder changes
+        vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
+            console.log("Workspace folders changed.");
+
+            // Handle added workspace folders
+            for (const addedFolder of event.added) {
+                const folderPath = addedFolder.uri.fsPath;
+                console.log("Workspace folder added: " + folderPath);
+
+                // Add all files in the new folder to fileYMap
+                await this.addAllFilesInDirectory(folderPath, addedFolder.name);
+            }
+
+            // Handle removed workspace folders
+            for (const removedFolder of event.removed) {
+                const folderPath = removedFolder.uri.fsPath;
+                console.log("Workspace folder removed: " + folderPath);
+
+                // Remove all files in the folder from fileYMap
+                this.removeAllFilesInDirectory(folderPath, removedFolder.name);
+            }
+        });
+
         vscode.workspace.onDidChangeTextDocument((event) => {
             if (event.document === vscode.window.activeTextEditor?.document) {
                 this.applyIncrementalChanges(
@@ -88,23 +108,17 @@ class DisposableWebSocket {
                 const filePath = file.fsPath;
                 const relativeFilePath = this.getRelativeFilePath(filePath);
 
-                // Check if it's a file, not a directory
+                // Check if it's a file or a directory
                 const fileStat = await vscode.workspace.fs.stat(file);
                 if (fileStat.type === vscode.FileType.File) {
-                    if (!this.fileYMap.has(relativeFilePath)) {
-                        const yText = new Y.Text();
-                        this.fileYMap.set(relativeFilePath, yText);
-
-                        const document =
-                            await vscode.workspace.openTextDocument(filePath);
-                        const content = document.getText();
-
-                        yText.insert(0, content);
-                        console.log(`File created: ${relativeFilePath}`);
-                    }
+                    // Add single file to fileYMap
+                    await this.addFileToYMap(filePath, relativeFilePath);
                 } else if (fileStat.type === vscode.FileType.Directory) {
-                    console.log(
-                        `Folder created: ${relativeFilePath} - Skipping`
+                    // Folder detected - add all files within this folder to fileYMap
+                    console.log(`Folder created: ${relativeFilePath}`);
+                    await this.addAllFilesInDirectory(
+                        filePath,
+                        relativeFilePath
                     );
                 }
             }
@@ -145,6 +159,52 @@ class DisposableWebSocket {
         });
     }
 
+    // Function to add a single file to fileYMap
+    private async addFileToYMap(filePath: string, relativeFilePath: string) {
+        if (!this.fileYMap.has(relativeFilePath)) {
+            const yText = new Y.Text();
+            this.fileYMap.set(relativeFilePath, yText);
+
+            const document = await vscode.workspace.openTextDocument(filePath);
+            const content = document.getText();
+            yText.insert(0, content);
+
+            console.log(`File added to fileYMap: ${relativeFilePath}`);
+        }
+    }
+
+    // Function to add all files within a directory to fileYMap
+    private async addAllFilesInDirectory(
+        folderPath: string,
+        relativeFolderPath: string
+    ) {
+        // Find all files in the created directory
+        const files = await vscode.workspace.findFiles(
+            new vscode.RelativePattern(folderPath, "**/*")
+        );
+
+        for (const file of files) {
+            const filePath = file.fsPath;
+            const relativeFilePath = this.getRelativeFilePath(filePath);
+
+            const fileStat = await vscode.workspace.fs.stat(file);
+            if (fileStat.type === vscode.FileType.File) {
+                await this.addFileToYMap(filePath, relativeFilePath);
+            }
+        }
+    }
+
+    // Function to remove all files within a directory from fileYMap
+    private removeAllFilesInDirectory(folderPath: string, folderName: string) {
+        // Identify files in fileYMap that are within the specified folder path
+        for (const key of Array.from(this.fileYMap.keys())) {
+            if (key.startsWith(`${folderName}/`)) {
+                this.fileYMap.delete(key);
+                console.log(`File removed from fileYMap: ${key}`);
+            }
+        }
+    }
+
     private applyIncrementalChanges(
         fileName: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
@@ -172,6 +232,7 @@ class DisposableWebSocket {
 
     public dispose() {
         this.provider.destroy();
+        this.yDoc.destroy();
     }
 }
 
@@ -294,12 +355,32 @@ const hideCodeLensProvider = new HideCodeLensProvider();
 
 export function activate(context: vscode.ExtensionContext) {
     status.text = "$(sync-ignored) Coducate";
+    let roomId = context.globalState.get<string>(ROOM_ID_KEY);
+
+    // Restore the live coding session if a roomId exists in globalState
+    if (roomId) {
+        disposableWebSocket = new DisposableWebSocket(serverWsUrl, roomId);
+        context.subscriptions.push(disposableWebSocket);
+        status.text = "$(sync) Coducate";
+        vscode.window.showInformationMessage(
+            "Live coding session restored. Room ID: " + roomId
+        );
+
+        // Show the roomId in the status bar, make it large on hover
+        status.tooltip = roomId;
+        status.command = {
+            title: "Copy Room ID",
+            command: "coducate.copyRoomId",
+            arguments: [roomId],
+        };
+    }
 
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
         () => {
-            // Generate a random roomId
-            const roomId = Math.random().toString(36).substring(2, 10);
+            // Generate a new roomId
+            let roomId = Math.random().toString(36).substring(2, 10);
+            context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
 
             if (!disposableWebSocket) {
                 disposableWebSocket = new DisposableWebSocket(
@@ -322,6 +403,7 @@ export function activate(context: vscode.ExtensionContext) {
                 };
             } else {
                 console.log("Live coding session is already running.");
+                status.text = "$(sync) Coducate";
             }
         }
     );
@@ -334,8 +416,12 @@ export function activate(context: vscode.ExtensionContext) {
                 disposableWebSocket = undefined;
                 status.text = "$(sync-ignored) Coducate"; // Update status bar to inactive state
                 console.log("Live coding session ended.");
+
+                // Clear the stored roomId from globalState
+                context.globalState.update(ROOM_ID_KEY, undefined);
             } else {
                 console.log("No live coding session is running.");
+                status.text = "$(sync-ignored) Coducate";
             }
         }
     );
@@ -409,7 +495,8 @@ export function activate(context: vscode.ExtensionContext) {
         startCommand,
         endCommand,
         hideCodeCommand,
-        showCodeCommand
+        showCodeCommand,
+        copyRoomIdCommand
     );
 
     // Register CodeLens Provider
