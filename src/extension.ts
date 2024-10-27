@@ -22,7 +22,7 @@ class DisposableWebSocket {
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
         // Sync initial files from the workspace
-        this.setupFileSync();
+        this.addAllFilesInDirectory("");
 
         this.setupVSCodeListeners();
     }
@@ -41,34 +41,6 @@ class DisposableWebSocket {
         return filePath; // Return absolute path if file is not within any workspace folder
     }
 
-    // Function to gather files and add them to the shared Yjs map
-    private async setupFileSync() {
-        const files = await vscode.workspace.findFiles("**/*"); // Get all files in the workspace
-        for (const file of files) {
-            const filePath = file.fsPath;
-            const relativeFilePath = this.getRelativeFilePath(filePath);
-
-            // Check if it's a file, not a directory
-            const fileStat = await vscode.workspace.fs.stat(file);
-            if (fileStat.type === vscode.FileType.File) {
-                if (!this.fileYMap.has(relativeFilePath)) {
-                    const yText = new Y.Text();
-                    this.fileYMap.set(relativeFilePath, yText);
-
-                    // Open the file and sync its content to Y.Text
-                    const document = await vscode.workspace.openTextDocument(
-                        filePath
-                    );
-                    const content = document.getText();
-
-                    yText.insert(0, content);
-                }
-            } else {
-                console.log(`Skipped folder: ${relativeFilePath}`);
-            }
-        }
-    }
-
     private setupVSCodeListeners() {
         // Listen to workspace folder changes
         vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
@@ -80,7 +52,7 @@ class DisposableWebSocket {
                 console.log("Workspace folder added: " + folderPath);
 
                 // Add all files in the new folder to fileYMap
-                await this.addAllFilesInDirectory(folderPath, addedFolder.name);
+                await this.addAllFilesInDirectory(folderPath);
             }
 
             // Handle removed workspace folders
@@ -116,10 +88,7 @@ class DisposableWebSocket {
                 } else if (fileStat.type === vscode.FileType.Directory) {
                     // Folder detected - add all files within this folder to fileYMap
                     console.log(`Folder created: ${relativeFilePath}`);
-                    await this.addAllFilesInDirectory(
-                        filePath,
-                        relativeFilePath
-                    );
+                    await this.addAllFilesInDirectory(filePath);
                 }
             }
         });
@@ -165,19 +134,24 @@ class DisposableWebSocket {
             const yText = new Y.Text();
             this.fileYMap.set(relativeFilePath, yText);
 
-            const document = await vscode.workspace.openTextDocument(filePath);
-            const content = document.getText();
-            yText.insert(0, content);
+            try {
+                const document = await vscode.workspace.openTextDocument(
+                    filePath
+                );
+                const content = document.getText();
+                yText.insert(0, content);
 
-            console.log(`File added to fileYMap: ${relativeFilePath}`);
+                console.log(`File added to fileYMap: ${relativeFilePath}`);
+            } catch (error) {
+                console.log(
+                    `Error opening file: ${relativeFilePath}. Probably binary.`
+                );
+            }
         }
     }
 
     // Function to add all files within a directory to fileYMap
-    private async addAllFilesInDirectory(
-        folderPath: string,
-        relativeFolderPath: string
-    ) {
+    private async addAllFilesInDirectory(folderPath: string) {
         // Find all files in the created directory
         const files = await vscode.workspace.findFiles(
             new vscode.RelativePattern(folderPath, "**/*")
