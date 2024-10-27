@@ -6,6 +6,18 @@ import path from "path";
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
 const ROOM_ID_KEY = "coducateRoomId";
+const EXCLUDED_DIRECTORIES = new Set([
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    ".vscode",
+    "coverage",
+    "out",
+    "tmp",
+    "logs",
+    ".cache",
+]);
 
 class DisposableWebSocket {
     private provider: WebsocketProvider;
@@ -21,8 +33,10 @@ class DisposableWebSocket {
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
-        // Sync initial files from the workspace
-        this.addAllFilesInDirectory("");
+        // Sync initial files from each workspace folder
+        vscode.workspace.workspaceFolders?.forEach((folder) => {
+            this.addAllFilesInDirectory(folder.uri.fsPath);
+        });
 
         this.setupVSCodeListeners();
     }
@@ -161,11 +175,24 @@ class DisposableWebSocket {
             const filePath = file.fsPath;
             const relativeFilePath = this.getRelativeFilePath(filePath);
 
+            // Skip files in excluded directories
+            if (this.isExcludedDirectory(filePath)) {
+                continue;
+            }
+
             const fileStat = await vscode.workspace.fs.stat(file);
             if (fileStat.type === vscode.FileType.File) {
                 await this.addFileToYMap(filePath, relativeFilePath);
             }
         }
+    }
+
+    // Helper function to check if a file is within an excluded directory
+    private isExcludedDirectory(filePath: string): boolean {
+        const pathSegments = filePath.split(path.sep);
+        return pathSegments.some((segment) =>
+            EXCLUDED_DIRECTORIES.has(segment)
+        );
     }
 
     // Function to remove all files within a directory from fileYMap
