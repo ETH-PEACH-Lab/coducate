@@ -56,6 +56,35 @@ class DisposableWebSocket {
     }
 
     private setupVSCodeListeners() {
+        // Listen to file renames
+        vscode.workspace.onDidRenameFiles(async (event) => {
+            for (const { oldUri, newUri } of event.files) {
+                const oldFilePath = oldUri.fsPath;
+                const newFilePath = newUri.fsPath;
+                const oldRelativePath = this.getRelativeFilePath(oldFilePath);
+                const newRelativePath = this.getRelativeFilePath(newFilePath);
+
+                // Check if it's a file or a directory
+                const fileStat = await vscode.workspace.fs.stat(newUri);
+                if (fileStat.type === vscode.FileType.File) {
+                    // Rename single file in fileYMap
+                    await this.renameFileInYMap(
+                        oldRelativePath,
+                        newRelativePath
+                    );
+                } else if (fileStat.type === vscode.FileType.Directory) {
+                    // Rename folder and all files within it
+                    console.log(
+                        `Folder renamed: ${oldRelativePath} -> ${newRelativePath}`
+                    );
+                    await this.renameAllFilesInDirectory(
+                        oldRelativePath,
+                        newRelativePath
+                    );
+                }
+            }
+        });
+
         // Listen to workspace folder changes
         vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
             console.log("Workspace folders changed.");
@@ -203,6 +232,54 @@ class DisposableWebSocket {
                 this.fileYMap.delete(key);
                 console.log(`File removed from fileYMap: ${key}`);
             }
+        }
+    }
+
+    // Method to handle renaming of files or directories with added safety checks
+    private async renameFileInYMap(
+        oldRelativePath: string,
+        newRelativePath: string
+    ) {
+        // Check if the old path exists in fileYMap
+        const oldYText = this.fileYMap.get(oldRelativePath);
+
+        if (oldYText) {
+            // Create a new Y.Text instance if necessary for the new path
+            const newYText = this.fileYMap.has(newRelativePath)
+                ? this.fileYMap.get(newRelativePath)
+                : new Y.Text();
+
+            // Copy the content from the old Y.Text instance to the new one
+            if (newYText && oldYText.toString()) {
+                newYText.insert(0, oldYText.toString());
+            }
+
+            // Remove the old entry and add the new one
+            this.fileYMap.delete(oldRelativePath);
+            this.fileYMap.set(newRelativePath, newYText!);
+
+            console.log(`Renamed: ${oldRelativePath} -> ${newRelativePath}`);
+        } else {
+            console.log(
+                `Rename error: ${oldRelativePath} not found in fileYMap.`
+            );
+        }
+    }
+
+    // Function to rename all files within a directory in fileYMap
+    private async renameAllFilesInDirectory(
+        oldRelativePath: string,
+        newRelativePath: string
+    ) {
+        // Find all entries in fileYMap that start with the old folder path
+        const keysToRename = Array.from(this.fileYMap.keys()).filter((key) =>
+            key.startsWith(oldRelativePath + path.sep)
+        );
+
+        for (const oldKey of keysToRename) {
+            const newKey = oldKey.replace(oldRelativePath, newRelativePath);
+            // Reuse renameFileInYMap to handle each file rename
+            await this.renameFileInYMap(oldKey, newKey);
         }
     }
 
