@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 import path from "path";
+import * as fs from "fs";
 
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
@@ -169,6 +170,14 @@ class DisposableWebSocket {
                 }
             }
         });
+    }
+
+    // Public wrapper to expose adding a file to the Y map
+    public async addFileToSharedMap(
+        filePath: string,
+        relativeFilePath: string
+    ) {
+        await this.addFileToYMap(filePath, relativeFilePath);
     }
 
     // Function to add a single file to fileYMap
@@ -455,19 +464,33 @@ export function activate(context: vscode.ExtensionContext) {
 
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
-        () => {
-            // Generate a new roomId
-            let roomId = Math.random().toString(36).substring(2, 10);
-            context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
-
+        async () => {
             if (!disposableWebSocket) {
+                // Prompt user for task description and learning goals
+                const taskDescription = await vscode.window.showInputBox({
+                    prompt: "Enter the task description",
+                    placeHolder: "What is the main goal of this session?",
+                });
+                const learningGoalsInput = await vscode.window.showInputBox({
+                    prompt: "Enter learning goals (comma-separated)",
+                    placeHolder: "e.g., React, Input/Output, Unit Testing",
+                });
+
+                // Convert learning goals to an array
+                const learningGoals = learningGoalsInput
+                    ? learningGoalsInput.split(",").map((goal) => goal.trim())
+                    : [];
+
+                // Generate a new roomId
+                let roomId = Math.random().toString(36).substring(2, 10);
+                context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
+
                 disposableWebSocket = new DisposableWebSocket(
                     serverWsUrl,
                     roomId
                 );
                 context.subscriptions.push(disposableWebSocket);
                 status.text = "$(sync) Coducate";
-                console.log("Live coding session started.");
                 vscode.window.showInformationMessage(
                     "Live coding session started. Room ID: " + roomId
                 );
@@ -479,8 +502,33 @@ export function activate(context: vscode.ExtensionContext) {
                     command: "coducate.copyRoomId",
                     arguments: [roomId],
                 };
+
+                // Path for coducateSetup.json file in the workspace
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders && workspaceFolders.length > 0) {
+                    const workspaceFolder = workspaceFolders[0];
+                    const setupFilePath = path.join(
+                        workspaceFolder.uri.fsPath,
+                        "coducateSetup.jsonc"
+                    );
+
+                    // Create JSON content with comments
+                    const setupContent = `
+// This file contains the setup for task description and learning goals.
+// If edited, a browser refresh is required to see the changes.
+
+{
+  "taskDescription": ${JSON.stringify(taskDescription)},
+  "learningGoals": ${JSON.stringify(learningGoals)}
+}`;
+
+                    // Write the content to coducateSetup.jsonc
+                    fs.writeFileSync(setupFilePath, setupContent);
+                }
             } else {
-                console.log("Live coding session is already running.");
+                vscode.window.showInformationMessage(
+                    "A live coding session is already running."
+                );
                 status.text = "$(sync) Coducate";
             }
         }
