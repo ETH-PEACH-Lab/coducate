@@ -3,6 +3,7 @@ import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 import path from "path";
 import * as fs from "fs";
+import { Awareness } from "y-protocols/awareness";
 
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
@@ -23,6 +24,7 @@ const EXCLUDED_DIRECTORIES = new Set([
 class DisposableWebSocket {
     private provider: WebsocketProvider;
     private yDoc: Y.Doc;
+    private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
 
     constructor(url: string, roomId: string) {
@@ -30,6 +32,9 @@ class DisposableWebSocket {
         this.provider = new WebsocketProvider(url, roomId, this.yDoc, {
             WebSocketPolyfill: require("ws"),
         });
+
+        // Initialize awareness for the provider
+        this.awareness = this.provider.awareness;
 
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
@@ -116,6 +121,40 @@ class DisposableWebSocket {
                     event.contentChanges
                 );
             }
+        });
+
+        // Listen to cursor movement and selection changes
+        vscode.window.onDidChangeTextEditorSelection((event) => {
+            if (event.textEditor === vscode.window.activeTextEditor) {
+                const relativeFilePath = this.getRelativeFilePath(
+                    event.textEditor.document.fileName
+                );
+                const position = event.selections[0].active;
+                const selection = event.selections[0];
+                const clientState = {
+                    filePath: relativeFilePath,
+                    cursorPosition: {
+                        line: position.line,
+                        column: position.character,
+                    },
+                    selectionRange: {
+                        start: {
+                            line: selection.start.line,
+                            column: selection.start.character,
+                        },
+                        end: {
+                            line: selection.end.line,
+                            column: selection.end.character,
+                        },
+                    },
+                };
+                this.awareness.setLocalStateField("vsCodeClient", clientState);
+            }
+        });
+
+        // Clean up awareness state when editor is closed or session ends
+        vscode.workspace.onDidCloseTextDocument(() => {
+            this.awareness.setLocalStateField("vsCodeClient", null);
         });
 
         // Listen to file creation
@@ -320,6 +359,7 @@ class DisposableWebSocket {
     public dispose() {
         this.provider.destroy();
         this.yDoc.destroy();
+        this.awareness.setLocalState(null);
     }
 }
 
