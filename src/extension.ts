@@ -513,8 +513,7 @@ export function activate(context: vscode.ExtensionContext) {
                     );
 
                     // Create JSON content with comments
-                    const setupContent = `
-// This file contains the setup for task description and learning goals.
+                    const setupContent = `// This file contains the setup for task description and learning goals.
 // If edited, a browser refresh is required to see the changes.
 
 {
