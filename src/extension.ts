@@ -4,6 +4,7 @@ import * as Y from "yjs";
 import path from "path";
 import * as fs from "fs";
 import { Awareness } from "y-protocols/awareness";
+import * as os from "os";
 
 const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
@@ -211,12 +212,22 @@ class DisposableWebSocket {
         });
     }
 
-    // Public wrapper to expose adding a file to the Y map
-    public async addFileToSharedMap(
-        filePath: string,
-        relativeFilePath: string
-    ) {
-        await this.addFileToYMap(filePath, relativeFilePath);
+    // Public method to expose addTmpFileToYMap functionality
+    public async addTemporaryFileToYMap() {
+        await this.addTmpFileToYMap();
+    }
+
+    // Function to add the /tmp file directly to fileYMap
+    private async addTmpFileToYMap() {
+        const tmpFilePath = path.join(os.tmpdir(), "coducateSetup.jsonc");
+
+        // Check if file exists before trying to add it
+        if (fs.existsSync(tmpFilePath)) {
+            await this.addFileToYMap(tmpFilePath, tmpFilePath);
+            console.log(`Temporary file added to fileYMap: ${tmpFilePath}`);
+        } else {
+            console.log("Temporary file does not exist in /tmp directory.");
+        }
     }
 
     // Function to add a single file to fileYMap
@@ -543,17 +554,14 @@ export function activate(context: vscode.ExtensionContext) {
                     arguments: [roomId],
                 };
 
-                // Path for coducateSetup.json file in the workspace
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (workspaceFolders && workspaceFolders.length > 0) {
-                    const workspaceFolder = workspaceFolders[0];
-                    const setupFilePath = path.join(
-                        workspaceFolder.uri.fsPath,
-                        "coducateSetup.jsonc"
-                    );
+                // Path for coducateSetup.jsonc file in the /tmp directory
+                const setupFilePath = path.join(
+                    os.tmpdir(),
+                    "coducateSetup.jsonc"
+                );
 
-                    // Create JSON content with comments
-                    const setupContent = `// This file contains the setup for task description and learning goals.
+                // Create JSON content with comments
+                const setupContent = `// This file contains the setup for task description and learning goals.
 // If edited, a browser refresh is required to see the changes.
 
 {
@@ -561,9 +569,10 @@ export function activate(context: vscode.ExtensionContext) {
   "learningGoals": ${JSON.stringify(learningGoals)}
 }`;
 
-                    // Write the content to coducateSetup.jsonc
-                    fs.writeFileSync(setupFilePath, setupContent);
-                }
+                // Write the content to coducateSetup.jsonc
+                fs.writeFileSync(setupFilePath, setupContent);
+
+                await disposableWebSocket.addTemporaryFileToYMap(); // Add the /tmp file directly to fileYMap
             } else {
                 vscode.window.showInformationMessage(
                     "A live coding session is already running."
