@@ -153,6 +153,38 @@ class DisposableWebSocket {
             }
         });
 
+        // Listen for active editor changes (e.g., when a different file is opened)
+        vscode.window.onDidChangeActiveTextEditor((editor) => {
+            if (editor) {
+                console.log("Active editor changed.");
+                const relativeFilePath = this.getRelativeFilePath(
+                    editor.document.fileName
+                );
+                const position = editor.selection.active;
+                const selection = editor.selection;
+                const clientState = {
+                    filePath: relativeFilePath,
+                    cursorPosition: {
+                        line: position.line,
+                        column: position.character,
+                    },
+                    selectionRange: {
+                        start: {
+                            line: selection.start.line,
+                            column: selection.start.character,
+                        },
+                        end: {
+                            line: selection.end.line,
+                            column: selection.end.character,
+                        },
+                    },
+                };
+                this.awareness.setLocalStateField("vsCodeClient", clientState);
+            } else {
+                console.log("No active editor.");
+            }
+        });
+
         // Clean up awareness state when editor is closed or session ends
         vscode.workspace.onDidCloseTextDocument(() => {
             this.awareness.setLocalStateField("vsCodeClient", null);
