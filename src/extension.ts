@@ -164,8 +164,6 @@ class DisposableWebSocket {
                     filePath: relativeFilePath,
                 };
                 this.awareness.setLocalStateField("vsCodeClient", clientState);
-            } else {
-                console.log("No active editor.");
             }
         });
 
