@@ -448,6 +448,7 @@ class DisposableWebSocket {
     }
 
     public dispose() {
+        this.provider.disconnect();
         this.provider.destroy();
         this.yDoc.destroy();
         this.awareness.setLocalState(null);
