@@ -27,6 +27,8 @@ class DisposableWebSocket {
     private yDoc: Y.Doc;
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
+    private idYMap: Y.Map<string>; // A shared map to store simple user IDs and their corresponding awareness.clientId values
+    private nextSimpleId: number = 1; // Start ID counter from 1
 
     constructor(url: string, roomId: string) {
         this.yDoc = new Y.Doc();
@@ -40,12 +42,26 @@ class DisposableWebSocket {
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
+        // Initialize the shared user ID list in the Y.Doc
+        this.idYMap = this.yDoc.getMap("idYMap");
+
+        this.setupClientAwarenessListener();
+
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
             this.addAllFilesInDirectory(folder.uri.fsPath);
         });
 
         this.setupVSCodeListeners();
+    }
+
+    // Function to set up listener for awareness client state changes
+    private setupClientAwarenessListener() {
+        this.awareness.on("update", ({ added }: { added: number[] }) => {
+            for (const clientId of added) {
+                this.assignSimpleId(clientId);
+            }
+        });
     }
 
     private getRelativeFilePath(filePath: string): string {
@@ -224,6 +240,56 @@ class DisposableWebSocket {
                 }
             }
         });
+    }
+
+    // Function to assign a unique, incremental simple ID to each client
+    private assignSimpleId(clientId: number) {
+        const clientIdStr = clientId.toString();
+        if (!this.idYMap.has(clientIdStr)) {
+            // Store the simple ID as a JSON string to ensure JSON compatibility (Y.Map values must be JSON-compatible)
+            const simpleIdStr = JSON.stringify({
+                simpleID: this.nextSimpleId,
+                hasAccess: false,
+            });
+            this.idYMap.set(clientIdStr, simpleIdStr); // Store JSON-compatible string
+            this.nextSimpleId += 1;
+        }
+    }
+
+    // Function to grant write access to a user by their simple ID
+    public grantWriteAccessToUser(userId: string): boolean {
+        const clientIdStr = Array.from(this.idYMap.keys()).find((key) => {
+            const clientData = JSON.parse(this.idYMap.get(key) || "{}");
+            return clientData.simpleID === parseInt(userId);
+        });
+
+        if (clientIdStr) {
+            const clientData = JSON.parse(this.idYMap.get(clientIdStr) || "{}");
+            clientData.hasAccess = true;
+
+            this.idYMap.set(clientIdStr, JSON.stringify(clientData));
+            return true;
+        }
+
+        return false;
+    }
+
+    // Function to remove write access from a user by their simple ID
+    public revokeWriteAccessFromUser(userId: string): boolean {
+        const clientIdStr = Array.from(this.idYMap.keys()).find((key) => {
+            const clientData = JSON.parse(this.idYMap.get(key) || "{}");
+            return clientData.simpleID === parseInt(userId);
+        });
+
+        if (clientIdStr) {
+            const clientData = JSON.parse(this.idYMap.get(clientIdStr) || "{}");
+            clientData.hasAccess = false;
+
+            this.idYMap.set(clientIdStr, JSON.stringify(clientData));
+            return true;
+        }
+
+        return false;
     }
 
     // Public method to expose addTmpFileToYMap functionality
@@ -679,12 +745,74 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    // Command to grant write access to a user
+    const grantWriteAccessCommand = vscode.commands.registerCommand(
+        "coducate.grantWriteAccess",
+        async () => {
+            const userId = await vscode.window.showInputBox({
+                prompt: "Enter the user ID to grant write access",
+                placeHolder: "Enter user ID",
+            });
+
+            if (userId && disposableWebSocket) {
+                const success =
+                    disposableWebSocket.grantWriteAccessToUser(userId);
+
+                if (success) {
+                    vscode.window.showInformationMessage(
+                        `Write access granted to user ID: ${userId}`
+                    );
+                } else {
+                    vscode.window.showErrorMessage(
+                        `User ID ${userId} not found.`
+                    );
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "Invalid input or session not active."
+                );
+            }
+        }
+    );
+
+    // Command to revoke write access from a user
+    const revokeWriteAccessCommand = vscode.commands.registerCommand(
+        "coducate.revokeWriteAccess",
+        async () => {
+            const userId = await vscode.window.showInputBox({
+                prompt: "Enter the user ID to revoke write access",
+                placeHolder: "Enter user ID",
+            });
+
+            if (userId && disposableWebSocket) {
+                const success =
+                    disposableWebSocket.revokeWriteAccessFromUser(userId);
+
+                if (success) {
+                    vscode.window.showInformationMessage(
+                        `Write access revoked from user ID: ${userId}`
+                    );
+                } else {
+                    vscode.window.showErrorMessage(
+                        `User ID ${userId} not found.`
+                    );
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "Invalid input or session not active."
+                );
+            }
+        }
+    );
+
     context.subscriptions.push(
         startCommand,
         endCommand,
         hideCodeCommand,
         showCodeCommand,
-        copyRoomIdCommand
+        copyRoomIdCommand,
+        grantWriteAccessCommand,
+        revokeWriteAccessCommand
     );
 
     // Register CodeLens Provider

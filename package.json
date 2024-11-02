@@ -34,6 +34,14 @@
             {
                 "command": "coducate.copyRoomId",
                 "title": "Coducate: Copy Room ID"
+            },
+            {
+                "command": "coducate.grantWriteAccess",
+                "title": "Coducate: Grant Write Access"
+            },
+            {
+                "command": "coducate.revokeWriteAccess",
+                "title": "Coducate: Revoke Write Access"
             }
         ]
     },
