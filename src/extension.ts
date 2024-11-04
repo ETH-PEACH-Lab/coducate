@@ -5,8 +5,8 @@ import path from "path";
 import * as fs from "fs";
 import { Awareness } from "y-protocols/awareness";
 import * as os from "os";
+import { WebSocket } from "ws";
 
-const serverWsUrl = "ws://localhost:1234";
 let disposableWebSocket: DisposableWebSocket | undefined;
 const ROOM_ID_KEY = "coducateRoomId";
 const EXCLUDED_DIRECTORIES = new Set([
@@ -24,28 +24,25 @@ const EXCLUDED_DIRECTORIES = new Set([
 
 class DisposableWebSocket {
     private provider: WebsocketProvider;
+    private controlWebSocket: WebSocket;
+    private roomId: string;
     private yDoc: Y.Doc;
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
-    private idYMap: Y.Map<string>; // A shared map to store simple user IDs and their corresponding awareness.clientId values
-    private nextSimpleId: number = 1; // Start ID counter from 1
 
-    constructor(url: string, roomId: string) {
+    constructor(urlYjs: string, urlControlWebsocket: string, roomId: string) {
+        this.roomId = roomId;
         this.yDoc = new Y.Doc();
-        this.provider = new WebsocketProvider(url, roomId, this.yDoc, {
+        this.provider = new WebsocketProvider(urlYjs, roomId, this.yDoc, {
             WebSocketPolyfill: require("ws"),
         });
+        this.controlWebSocket = new WebSocket(urlControlWebsocket);
 
         // Initialize awareness for the provider
         this.awareness = this.provider.awareness;
 
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
-
-        // Initialize the shared user ID list in the Y.Doc
-        this.idYMap = this.yDoc.getMap("idYMap");
-
-        this.setupClientAwarenessListener();
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
@@ -55,13 +52,16 @@ class DisposableWebSocket {
         this.setupVSCodeListeners();
     }
 
-    // Function to set up listener for awareness client state changes
-    private setupClientAwarenessListener() {
-        this.awareness.on("update", ({ added }: { added: number[] }) => {
-            for (const clientId of added) {
-                this.assignSimpleId(clientId);
-            }
-        });
+    public getProvider() {
+        return this.provider;
+    }
+
+    public getWebControlWebSocket() {
+        return this.controlWebSocket;
+    }
+
+    public getRoomId() {
+        return this.roomId;
     }
 
     private getRelativeFilePath(filePath: string): string {
@@ -240,56 +240,6 @@ class DisposableWebSocket {
                 }
             }
         });
-    }
-
-    // Function to assign a unique, incremental simple ID to each client
-    private assignSimpleId(clientId: number) {
-        const clientIdStr = clientId.toString();
-        if (!this.idYMap.has(clientIdStr)) {
-            // Store the simple ID as a JSON string to ensure JSON compatibility (Y.Map values must be JSON-compatible)
-            const simpleIdStr = JSON.stringify({
-                simpleID: this.nextSimpleId,
-                hasAccess: false,
-            });
-            this.idYMap.set(clientIdStr, simpleIdStr); // Store JSON-compatible string
-            this.nextSimpleId += 1;
-        }
-    }
-
-    // Function to grant write access to a user by their simple ID
-    public grantWriteAccessToUser(userId: string): boolean {
-        const clientIdStr = Array.from(this.idYMap.keys()).find((key) => {
-            const clientData = JSON.parse(this.idYMap.get(key) || "{}");
-            return clientData.simpleID === parseInt(userId);
-        });
-
-        if (clientIdStr) {
-            const clientData = JSON.parse(this.idYMap.get(clientIdStr) || "{}");
-            clientData.hasAccess = true;
-
-            this.idYMap.set(clientIdStr, JSON.stringify(clientData));
-            return true;
-        }
-
-        return false;
-    }
-
-    // Function to remove write access from a user by their simple ID
-    public revokeWriteAccessFromUser(userId: string): boolean {
-        const clientIdStr = Array.from(this.idYMap.keys()).find((key) => {
-            const clientData = JSON.parse(this.idYMap.get(key) || "{}");
-            return clientData.simpleID === parseInt(userId);
-        });
-
-        if (clientIdStr) {
-            const clientData = JSON.parse(this.idYMap.get(clientIdStr) || "{}");
-            clientData.hasAccess = false;
-
-            this.idYMap.set(clientIdStr, JSON.stringify(clientData));
-            return true;
-        }
-
-        return false;
     }
 
     // Public method to expose addTmpFileToYMap functionality
@@ -578,7 +528,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Restore the live coding session if a roomId exists in globalState
     if (roomId) {
-        disposableWebSocket = new DisposableWebSocket(serverWsUrl, roomId);
+        disposableWebSocket = new DisposableWebSocket(
+            "ws://localhost:1234/yjs",
+            "ws://localhost:1234/control",
+            roomId
+        );
         context.subscriptions.push(disposableWebSocket);
         status.text = "$(sync) Coducate";
         vscode.window.showInformationMessage(
@@ -618,7 +572,8 @@ export function activate(context: vscode.ExtensionContext) {
                 context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
 
                 disposableWebSocket = new DisposableWebSocket(
-                    serverWsUrl,
+                    "ws://localhost:1234/yjs",
+                    "ws://localhost:1234/control",
                     roomId
                 );
                 context.subscriptions.push(disposableWebSocket);
@@ -750,22 +705,82 @@ export function activate(context: vscode.ExtensionContext) {
     const grantWriteAccessCommand = vscode.commands.registerCommand(
         "coducate.grantWriteAccess",
         async () => {
-            const userId = await vscode.window.showInputBox({
+            const targetSimpleID = await vscode.window.showInputBox({
                 prompt: "Enter the user ID to grant write access",
                 placeHolder: "Enter user ID",
             });
 
-            if (userId && disposableWebSocket) {
-                const success =
-                    disposableWebSocket.grantWriteAccessToUser(userId);
+            if (
+                targetSimpleID &&
+                disposableWebSocket &&
+                disposableWebSocket.getWebControlWebSocket()
+            ) {
+                const checkAccess = async () => {
+                    return new Promise((resolve, reject) => {
+                        if (
+                            disposableWebSocket?.getWebControlWebSocket()
+                                .readyState === WebSocket.OPEN
+                        ) {
+                            // Define a unique message event handler to listen for the response
+                            const handleAccessResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "accessGranted" &&
+                                        payload.simpleID === targetSimpleID &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        // Access granted/denied from server response
+                                        resolve(true);
+                                        console.log("Access granted");
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                    console.log("Invalid JSON message");
+                                }
+                            };
 
-                if (success) {
+                            disposableWebSocket.getWebControlWebSocket().onmessage =
+                                (event) => {
+                                    try {
+                                        handleAccessResponse(
+                                            event.data.toString()
+                                        );
+                                    } catch {
+                                        // Ignore invalid JSON messages
+                                    }
+                                };
+
+                            disposableWebSocket.getWebControlWebSocket().send(
+                                JSON.stringify({
+                                    type: "grantAccess",
+                                    payload: {
+                                        roomId: disposableWebSocket.getRoomId(),
+                                        targetSimpleID,
+                                    },
+                                })
+                            );
+
+                            // Add a timeout to resolve/reject in case of no response
+                            setTimeout(() => {
+                                reject(new Error("Access check timed out"));
+                            }, 5000); // 5 seconds timeout
+                        } else {
+                            resolve(false); // Not connected, so no access
+                        }
+                    });
+                };
+
+                const accessGranted = await checkAccess();
+                if (accessGranted) {
                     vscode.window.showInformationMessage(
-                        `Write access granted to user ID: ${userId}`
+                        `Write access granted to user ID: ${targetSimpleID}`
                     );
                 } else {
                     vscode.window.showErrorMessage(
-                        `User ID ${userId} not found.`
+                        `User ID ${targetSimpleID} not found.`
                     );
                 }
             } else {
@@ -780,22 +795,82 @@ export function activate(context: vscode.ExtensionContext) {
     const revokeWriteAccessCommand = vscode.commands.registerCommand(
         "coducate.revokeWriteAccess",
         async () => {
-            const userId = await vscode.window.showInputBox({
+            const targetSimpleID = await vscode.window.showInputBox({
                 prompt: "Enter the user ID to revoke write access",
                 placeHolder: "Enter user ID",
             });
 
-            if (userId && disposableWebSocket) {
-                const success =
-                    disposableWebSocket.revokeWriteAccessFromUser(userId);
+            if (
+                targetSimpleID &&
+                disposableWebSocket &&
+                disposableWebSocket.getWebControlWebSocket()
+            ) {
+                const checkAccess = async () => {
+                    return new Promise((resolve, reject) => {
+                        if (
+                            disposableWebSocket?.getWebControlWebSocket()
+                                .readyState === WebSocket.OPEN
+                        ) {
+                            // Define a unique message event handler to listen for the response
+                            const handleAccessResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "accessRevoked" &&
+                                        payload.simpleID === targetSimpleID &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        // Access granted/denied from server response
+                                        resolve(true);
+                                        console.log("Access revoked");
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                    console.log("Invalid JSON message");
+                                }
+                            };
 
-                if (success) {
+                            disposableWebSocket.getWebControlWebSocket().onmessage =
+                                (event) => {
+                                    try {
+                                        handleAccessResponse(
+                                            event.data.toString()
+                                        );
+                                    } catch {
+                                        // Ignore invalid JSON messages
+                                    }
+                                };
+
+                            disposableWebSocket.getWebControlWebSocket().send(
+                                JSON.stringify({
+                                    type: "revokeAccess",
+                                    payload: {
+                                        roomId: disposableWebSocket.getRoomId(),
+                                        targetSimpleID,
+                                    },
+                                })
+                            );
+
+                            // Add a timeout to resolve/reject in case of no response
+                            setTimeout(() => {
+                                reject(new Error("Access check timed out"));
+                            }, 5000); // 5 seconds timeout
+                        } else {
+                            resolve(false); // Not connected, so no access
+                        }
+                    });
+                };
+
+                const accessGranted = await checkAccess();
+                if (accessGranted) {
                     vscode.window.showInformationMessage(
-                        `Write access revoked from user ID: ${userId}`
+                        `Write access granted to user ID: ${targetSimpleID}`
                     );
                 } else {
                     vscode.window.showErrorMessage(
-                        `User ID ${userId} not found.`
+                        `User ID ${targetSimpleID} not found.`
                     );
                 }
             } else {
