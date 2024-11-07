@@ -42,6 +42,10 @@
             {
                 "command": "coducate.revokeWriteAccess",
                 "title": "Coducate: Revoke Write Access"
+            },
+            {
+                "command": "coducate.runPythonFile",
+                "title": "Coducate: Run Python File"
             }
         ]
     },
