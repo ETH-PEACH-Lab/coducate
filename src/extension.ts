@@ -137,6 +137,19 @@ class DisposableWebSocket {
                     event.document.fileName,
                     event.contentChanges
                 );
+
+                // Send the instructor file name to the server
+                this.controlWebSocket.send(
+                    JSON.stringify({
+                        type: "setInstructorFile",
+                        payload: {
+                            roomId: this.roomId,
+                            instructorFile: this.getRelativeFilePath(
+                                event.document.fileName
+                            ),
+                        },
+                    })
+                );
             }
         });
 
@@ -166,6 +179,17 @@ class DisposableWebSocket {
                     },
                 };
                 this.awareness.setLocalStateField("vsCodeClient", clientState);
+
+                // Send the instructor file name to the server
+                this.controlWebSocket.send(
+                    JSON.stringify({
+                        type: "setInstructorFile",
+                        payload: {
+                            roomId: this.roomId,
+                            instructorFile: relativeFilePath,
+                        },
+                    })
+                );
             }
         });
 
