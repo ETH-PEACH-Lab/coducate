@@ -72,11 +72,20 @@ export function activate(context: vscode.ExtensionContext) {
                 let roomId = Math.random().toString(36).substring(2, 10);
                 context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
 
+                // Initialize the WebSocket connection
                 disposableWebSocket = new DisposableWebSocket(
                     "ws://localhost:1234/yjs",
                     "ws://localhost:1234/control",
                     roomId
                 );
+
+                // Capture the currently active file in the editor
+                const activeEditor = vscode.window.activeTextEditor;
+                const activeFilePath = activeEditor?.document.fileName;
+                const relativeFilePath = activeFilePath
+                    ? disposableWebSocket.getRelativeFilePath(activeFilePath)
+                    : null;
+
                 context.subscriptions.push(disposableWebSocket);
                 status.text = "$(sync) Coducate";
                 vscode.window.showInformationMessage(
@@ -109,7 +118,20 @@ export function activate(context: vscode.ExtensionContext) {
                 // Write the content to coducateSetup.jsonc
                 fs.writeFileSync(setupFilePath, setupContent);
 
-                await disposableWebSocket.addTemporaryFileToYMap(); // Add the /tmp file directly to fileYMap
+                await disposableWebSocket.addTemporaryFileToYMap();
+
+                // Send the currently active file to the server if available
+                if (relativeFilePath) {
+                    disposableWebSocket.getWebControlWebSocket().send(
+                        JSON.stringify({
+                            type: "setInstructorFile",
+                            payload: {
+                                roomId: roomId,
+                                instructorFile: relativeFilePath,
+                            },
+                        })
+                    );
+                }
             } else {
                 vscode.window.showInformationMessage(
                     "A live coding session is already running."
@@ -367,7 +389,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const accessGranted = await checkAccess();
                 if (accessGranted) {
                     vscode.window.showInformationMessage(
-                        `Write access granted to user ID: ${targetSimpleID}`
+                        `Write access revoked from user ID: ${targetSimpleID}`
                     );
                 } else {
                     vscode.window.showErrorMessage(
