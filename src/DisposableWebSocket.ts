@@ -62,7 +62,7 @@ export class DisposableWebSocket {
         return this.roomId;
     }
 
-    private getRelativeFilePath(filePath: string): string {
+    public getRelativeFilePath(filePath: string): string {
         const workspaceFolder = vscode.workspace.workspaceFolders?.find(
             (folder) => filePath.startsWith(folder.uri.fsPath)
         );
@@ -283,7 +283,6 @@ export class DisposableWebSocket {
         // Check if file exists before trying to add it
         if (fs.existsSync(tmpFilePath)) {
             await this.addFileToYMap(tmpFilePath, tmpFilePath);
-            console.log(`Temporary file added to fileYMap: ${tmpFilePath}`);
         } else {
             console.log("Temporary file does not exist in /tmp directory.");
         }
