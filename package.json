@@ -46,6 +46,14 @@
             {
                 "command": "coducate.runPythonFile",
                 "title": "Coducate: Run Python File"
+            },
+            {
+                "command": "coducate.requestTerminalOpen",
+                "title": "Coducate: Open Terminal"
+            },
+            {
+                "command": "coducate.requestTerminalClose",
+                "title": "Coducate: Close Terminal"
             }
         ]
     },

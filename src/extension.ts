@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { WebSocket } from "ws";
+import { WebSocket, Event } from "ws";
 import { DisposableWebSocket } from "./DisposableWebSocket";
 import { CaptureTerminal } from "./CaptureTerminal";
 import { HideCodeLensProvider } from "./HideCodeLensProvider";
@@ -52,62 +52,67 @@ export function activate(context: vscode.ExtensionContext) {
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
         async () => {
-            if (!disposableWebSocket) {
-                // Prompt user for task description and learning goals
-                const taskDescription = await vscode.window.showInputBox({
-                    prompt: "Enter the task description",
-                    placeHolder: "What is the main goal of this session?",
-                });
-                const learningGoalsInput = await vscode.window.showInputBox({
-                    prompt: "Enter learning goals (comma-separated)",
-                    placeHolder: "e.g., React, Input/Output, Unit Testing",
-                });
-
-                // Convert learning goals to an array
-                const learningGoals = learningGoalsInput
-                    ? learningGoalsInput.split(",").map((goal) => goal.trim())
-                    : [];
-
-                // Generate a new roomId
-                let roomId = Math.random().toString(36).substring(2, 10);
-                context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
-
-                // Initialize the WebSocket connection
-                disposableWebSocket = new DisposableWebSocket(
-                    "ws://localhost:1234/yjs",
-                    "ws://localhost:1234/control",
-                    roomId
-                );
-
-                // Capture the currently active file in the editor
-                const activeEditor = vscode.window.activeTextEditor;
-                const activeFilePath = activeEditor?.document.fileName;
-                const relativeFilePath = activeFilePath
-                    ? disposableWebSocket.getRelativeFilePath(activeFilePath)
-                    : null;
-
-                context.subscriptions.push(disposableWebSocket);
-                status.text = "$(sync) Coducate";
+            // Check if a WebSocket session is already running
+            if (disposableWebSocket) {
                 vscode.window.showInformationMessage(
-                    "Live coding session started. Room ID: " + roomId
+                    "A live coding session is already running."
                 );
+                status.text = "$(sync) Coducate";
+                return;
+            }
 
-                // Show the roomId in the status bar, make it large on hover
-                status.tooltip = roomId;
-                status.command = {
-                    title: "Copy Room ID",
-                    command: "coducate.copyRoomId",
-                    arguments: [roomId],
-                };
+            // Prompt user for task description and learning goals
+            const taskDescription = await vscode.window.showInputBox({
+                prompt: "Enter the task description",
+                placeHolder: "What is the main goal of this session?",
+            });
+            const learningGoalsInput = await vscode.window.showInputBox({
+                prompt: "Enter learning goals (comma-separated)",
+                placeHolder: "e.g., React, Input/Output, Unit Testing",
+            });
 
-                // Path for coducateSetup.jsonc file in the /tmp directory
-                const setupFilePath = path.join(
-                    os.tmpdir(),
-                    "coducateSetup.jsonc"
-                );
+            // Convert learning goals to an array
+            const learningGoals = learningGoalsInput
+                ? learningGoalsInput.split(",").map((goal) => goal.trim())
+                : [];
 
-                // Create JSON content with comments
-                const setupContent = `// This file contains the setup for task description and learning goals.
+            // Generate a new roomId
+            let roomId = Math.random().toString(36).substring(2, 10);
+            context.globalState.update(ROOM_ID_KEY, roomId); // Store the new roomId in globalState
+
+            // Initialize the WebSocket connection
+            disposableWebSocket = new DisposableWebSocket(
+                "ws://localhost:1234/yjs",
+                "ws://localhost:1234/control",
+                roomId
+            );
+
+            // Capture the currently active file in the editor
+            const activeEditor = vscode.window.activeTextEditor;
+            const activeFilePath = activeEditor?.document.fileName;
+            const relativeFilePath = activeFilePath
+                ? disposableWebSocket.getRelativeFilePath(activeFilePath)
+                : null;
+
+            context.subscriptions.push(disposableWebSocket);
+            status.text = "$(sync) Coducate";
+            vscode.window.showInformationMessage(
+                "Live coding session started. Room ID: " + roomId
+            );
+
+            // Show the roomId in the status bar, make it large on hover
+            status.tooltip = roomId;
+            status.command = {
+                title: "Copy Room ID",
+                command: "coducate.copyRoomId",
+                arguments: [roomId],
+            };
+
+            // Path for coducateSetup.jsonc file in the /tmp directory
+            const setupFilePath = path.join(os.tmpdir(), "coducateSetup.jsonc");
+
+            // Create JSON content with comments
+            const setupContent = `// This file contains the setup for task description and learning goals.
 // If edited, a browser refresh is required to see the changes.
 
 {
@@ -115,28 +120,57 @@ export function activate(context: vscode.ExtensionContext) {
   "learningGoals": ${JSON.stringify(learningGoals)}
 }`;
 
-                // Write the content to coducateSetup.jsonc
-                fs.writeFileSync(setupFilePath, setupContent);
+            // Write the content to coducateSetup.jsonc
+            fs.writeFileSync(setupFilePath, setupContent);
 
-                await disposableWebSocket.addTemporaryFileToYMap();
+            await disposableWebSocket.addTemporaryFileToYMap();
 
-                // Send the currently active file to the server if available
-                if (relativeFilePath) {
-                    disposableWebSocket.getWebControlWebSocket().send(
-                        JSON.stringify({
-                            type: "setInstructorFile",
-                            payload: {
-                                roomId: roomId,
-                                instructorFile: relativeFilePath,
-                            },
-                        })
-                    );
+            // Send the currently active file to the server if available
+            const controlWebSocket =
+                disposableWebSocket.getWebControlWebSocket();
+
+            if (controlWebSocket) {
+                // Attach an onopen event handler to send the instructor file once the connection is open
+                controlWebSocket.onopen = () => {
+                    console.log("WebSocket connection opened.");
+                    if (relativeFilePath) {
+                        try {
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "setInstructorFile",
+                                    payload: {
+                                        roomId: roomId,
+                                        instructorFile: relativeFilePath,
+                                    },
+                                })
+                            );
+                            console.log(
+                                `Instructor file sent: ${relativeFilePath}`
+                            );
+                        } catch (error) {
+                            vscode.window.showErrorMessage(
+                                "Failed to send instructor file: " +
+                                    (error as Error).message
+                            );
+                            console.error(
+                                "Error sending instructor file:",
+                                error
+                            );
+                        }
+                    }
+                };
+
+                // If the WebSocket is already open, trigger the onopen event manually
+                if (controlWebSocket.readyState === WebSocket.OPEN) {
+                    const mockEvent: Event = {
+                        target: controlWebSocket,
+                    } as Event;
+                    controlWebSocket.onopen(mockEvent);
                 }
             } else {
-                vscode.window.showInformationMessage(
-                    "A live coding session is already running."
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not available."
                 );
-                status.text = "$(sync) Coducate";
             }
         }
     );
@@ -240,10 +274,9 @@ export function activate(context: vscode.ExtensionContext) {
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
-                        if (
-                            disposableWebSocket?.getWebControlWebSocket()
-                                .readyState === WebSocket.OPEN
-                        ) {
+                        const controlWebSocket =
+                            disposableWebSocket?.getWebControlWebSocket();
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
                                 try {
@@ -261,26 +294,22 @@ export function activate(context: vscode.ExtensionContext) {
                                     }
                                 } catch {
                                     // Ignore invalid JSON messages
-                                    console.log("Invalid JSON message");
                                 }
                             };
 
-                            disposableWebSocket.getWebControlWebSocket().onmessage =
-                                (event) => {
-                                    try {
-                                        handleAccessResponse(
-                                            event.data.toString()
-                                        );
-                                    } catch {
-                                        // Ignore invalid JSON messages
-                                    }
-                                };
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleAccessResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
 
-                            disposableWebSocket.getWebControlWebSocket().send(
+                            controlWebSocket.send(
                                 JSON.stringify({
                                     type: "grantAccess",
                                     payload: {
-                                        roomId: disposableWebSocket.getRoomId(),
+                                        roomId: disposableWebSocket?.getRoomId(),
                                         targetSimpleID,
                                     },
                                 })
@@ -291,20 +320,26 @@ export function activate(context: vscode.ExtensionContext) {
                                 reject(new Error("Access check timed out"));
                             }, 5000); // 5 seconds timeout
                         } else {
-                            resolve(false); // Not connected, so no access
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
                         }
                     });
                 };
 
-                const accessGranted = await checkAccess();
-                if (accessGranted) {
-                    vscode.window.showInformationMessage(
-                        `Write access granted to user ID: ${targetSimpleID}`
-                    );
-                } else {
-                    vscode.window.showErrorMessage(
-                        `User ID ${targetSimpleID} not found.`
-                    );
+                try {
+                    const accessGranted = await checkAccess();
+                    if (accessGranted) {
+                        vscode.window.showInformationMessage(
+                            `Write access granted to user ID: ${targetSimpleID}`
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
                 }
             } else {
                 vscode.window.showErrorMessage(
@@ -330,10 +365,9 @@ export function activate(context: vscode.ExtensionContext) {
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
-                        if (
-                            disposableWebSocket?.getWebControlWebSocket()
-                                .readyState === WebSocket.OPEN
-                        ) {
+                        const controlWebSocket =
+                            disposableWebSocket?.getWebControlWebSocket();
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
                                 try {
@@ -351,26 +385,22 @@ export function activate(context: vscode.ExtensionContext) {
                                     }
                                 } catch {
                                     // Ignore invalid JSON messages
-                                    console.log("Invalid JSON message");
                                 }
                             };
 
-                            disposableWebSocket.getWebControlWebSocket().onmessage =
-                                (event) => {
-                                    try {
-                                        handleAccessResponse(
-                                            event.data.toString()
-                                        );
-                                    } catch {
-                                        // Ignore invalid JSON messages
-                                    }
-                                };
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleAccessResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
 
-                            disposableWebSocket.getWebControlWebSocket().send(
+                            controlWebSocket.send(
                                 JSON.stringify({
                                     type: "revokeAccess",
                                     payload: {
-                                        roomId: disposableWebSocket.getRoomId(),
+                                        roomId: disposableWebSocket?.getRoomId(),
                                         targetSimpleID,
                                     },
                                 })
@@ -381,20 +411,26 @@ export function activate(context: vscode.ExtensionContext) {
                                 reject(new Error("Access check timed out"));
                             }, 5000); // 5 seconds timeout
                         } else {
-                            resolve(false); // Not connected, so no access
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
                         }
                     });
                 };
 
-                const accessGranted = await checkAccess();
-                if (accessGranted) {
-                    vscode.window.showInformationMessage(
-                        `Write access revoked from user ID: ${targetSimpleID}`
-                    );
-                } else {
-                    vscode.window.showErrorMessage(
-                        `User ID ${targetSimpleID} not found.`
-                    );
+                try {
+                    const accessGranted = await checkAccess();
+                    if (accessGranted) {
+                        vscode.window.showInformationMessage(
+                            `Write access revoked from user ID: ${targetSimpleID}`
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
                 }
             } else {
                 vscode.window.showErrorMessage(
@@ -416,6 +452,11 @@ export function activate(context: vscode.ExtensionContext) {
             const document = editor.document;
             const filePath = document.uri.fsPath;
 
+            if (!disposableWebSocket) {
+                vscode.window.showErrorMessage("WebSocket is not initialized.");
+                return;
+            }
+
             const task = new vscode.Task(
                 { type: "runPython" },
                 vscode.TaskScope.Workspace,
@@ -429,6 +470,185 @@ export function activate(context: vscode.ExtensionContext) {
             );
 
             vscode.tasks.executeTask(task);
+
+            // Request the terminal to open
+            vscode.commands.executeCommand("coducate.requestTerminalOpen");
+        }
+    );
+
+    // Command to request terminal open
+    const requestTerminalOpen = vscode.commands.registerCommand(
+        "coducate.requestTerminalOpen",
+        async () => {
+            if (
+                disposableWebSocket &&
+                disposableWebSocket.getWebControlWebSocket()
+            ) {
+                const checkConnectionAndOpenTerminal = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            disposableWebSocket?.getWebControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "terminalOpened" &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                        console.log(
+                                            "Terminal opened successfully"
+                                        );
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "requestTerminalOpen",
+                                    payload: {
+                                        roomId: disposableWebSocket?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error("Terminal open request timed out")
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const terminalOpened =
+                        await checkConnectionAndOpenTerminal();
+                    if (terminalOpened) {
+                        vscode.window.showInformationMessage(
+                            "Terminal opened successfully."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
+    // Command to request terminal close
+    const requestTerminalClose = vscode.commands.registerCommand(
+        "coducate.requestTerminalClose",
+        async () => {
+            if (
+                disposableWebSocket &&
+                disposableWebSocket.getWebControlWebSocket()
+            ) {
+                const checkConnectionAndCloseTerminal = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            disposableWebSocket?.getWebControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "terminalClosed" &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                        console.log(
+                                            "Terminal closed successfully"
+                                        );
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "requestTerminalClose",
+                                    payload: {
+                                        roomId: disposableWebSocket?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error(
+                                        "Terminal close request timed out"
+                                    )
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const terminalClosed =
+                        await checkConnectionAndCloseTerminal();
+                    if (terminalClosed) {
+                        vscode.window.showInformationMessage(
+                            "Terminal closed successfully."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
         }
     );
 
@@ -440,7 +660,9 @@ export function activate(context: vscode.ExtensionContext) {
         copyRoomIdCommand,
         grantWriteAccessCommand,
         revokeWriteAccessCommand,
-        runPythonFile
+        runPythonFile,
+        requestTerminalOpen,
+        requestTerminalClose
     );
 
     // Register CodeLens Provider
