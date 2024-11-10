@@ -108,8 +108,6 @@ export class DisposableWebSocket {
 
         // Listen to workspace folder changes
         vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
-            console.log("Workspace folders changed.");
-
             // Handle added workspace folders
             for (const addedFolder of event.added) {
                 const folderPath = addedFolder.uri.fsPath;
@@ -130,23 +128,11 @@ export class DisposableWebSocket {
         });
 
         vscode.workspace.onDidChangeTextDocument((event) => {
+            console.log("Text document changed.");
             if (event.document === vscode.window.activeTextEditor?.document) {
                 this.applyIncrementalChanges(
                     event.document.fileName,
                     event.contentChanges
-                );
-
-                // Send the instructor file name to the server
-                this.controlWebSocket.send(
-                    JSON.stringify({
-                        type: "setInstructorFile",
-                        payload: {
-                            roomId: this.roomId,
-                            instructorFile: this.getRelativeFilePath(
-                                event.document.fileName
-                            ),
-                        },
-                    })
                 );
             }
         });
@@ -177,17 +163,6 @@ export class DisposableWebSocket {
                     },
                 };
                 this.awareness.setLocalStateField("vsCodeClient", clientState);
-
-                // Send the instructor file name to the server
-                this.controlWebSocket.send(
-                    JSON.stringify({
-                        type: "setInstructorFile",
-                        payload: {
-                            roomId: this.roomId,
-                            instructorFile: relativeFilePath,
-                        },
-                    })
-                );
             }
         });
 
@@ -202,6 +177,35 @@ export class DisposableWebSocket {
                     filePath: relativeFilePath,
                 };
                 this.awareness.setLocalStateField("vsCodeClient", clientState);
+
+                // Send the instructor file name to the server
+                if (
+                    this.controlWebSocket &&
+                    this.controlWebSocket.readyState === WebSocket.OPEN &&
+                    relativeFilePath
+                ) {
+                    try {
+                        // Send the instructor file name to the server
+                        this.controlWebSocket.send(
+                            JSON.stringify({
+                                type: "setInstructorFile",
+                                payload: {
+                                    roomId: this.roomId,
+                                    instructorFile: relativeFilePath,
+                                },
+                            })
+                        );
+                        console.log(
+                            `Instructor file sent: ${relativeFilePath}`
+                        );
+                    } catch (error) {
+                        console.error("Error sending instructor file:", error);
+                    }
+                } else {
+                    console.warn(
+                        "WebSocket connection is not open. Cannot send instructor file."
+                    );
+                }
             }
         });
 
