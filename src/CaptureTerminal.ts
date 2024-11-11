@@ -20,7 +20,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         private filePath: string,
         private disposableWebSocket: DisposableWebSocket
     ) {
-        this.outputFilePath = path.join(os.tmpdir(), "output.txt");
+        this.outputFilePath = path.join(os.tmpdir(), "coducateOutput.txt");
 
         // Clear the output file at the start
         fs.writeFileSync(this.outputFilePath, "");
