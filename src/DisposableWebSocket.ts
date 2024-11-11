@@ -54,6 +54,10 @@ export class DisposableWebSocket {
         return this.provider;
     }
 
+    public getAwareness() {
+        return this.awareness;
+    }
+
     public getWebControlWebSocket() {
         return this.controlWebSocket;
     }
@@ -128,7 +132,6 @@ export class DisposableWebSocket {
         });
 
         vscode.workspace.onDidChangeTextDocument((event) => {
-            console.log("Text document changed.");
             if (event.document === vscode.window.activeTextEditor?.document) {
                 this.applyIncrementalChanges(
                     event.document.fileName,
@@ -172,9 +175,24 @@ export class DisposableWebSocket {
                 const relativeFilePath = this.getRelativeFilePath(
                     editor.document.fileName
                 );
-
+                const position = editor.selections[0].active;
+                const selection = editor.selections[0];
                 const clientState = {
                     filePath: relativeFilePath,
+                    cursorPosition: {
+                        line: position.line,
+                        column: position.character,
+                    },
+                    selectionRange: {
+                        start: {
+                            line: selection.start.line,
+                            column: selection.start.character,
+                        },
+                        end: {
+                            line: selection.end.line,
+                            column: selection.end.character,
+                        },
+                    },
                 };
                 this.awareness.setLocalStateField("vsCodeClient", clientState);
 
@@ -207,11 +225,6 @@ export class DisposableWebSocket {
                     );
                 }
             }
-        });
-
-        // Clean up awareness state when editor is closed or session ends
-        vscode.workspace.onDidCloseTextDocument(() => {
-            this.awareness.setLocalStateField("vsCodeClient", null);
         });
 
         // Listen to file creation
