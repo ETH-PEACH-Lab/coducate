@@ -18,6 +18,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private commandOutputBuffer: string = ""; // Buffer for storing command outputs
     private shellProcess: ChildProcessWithoutNullStreams | null = null;
     private cwd: string = os.homedir();
+    private isExpectingInput: boolean = false;
 
     constructor(private disposableWebSocket: DisposableWebSocket) {
         this.outputFilePath = path.join(os.tmpdir(), "coducateOutput.txt");
@@ -139,21 +140,27 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     }
 
     private handleShellOutput(data: string) {
-        // Write the shell output to the terminal and append to the buffer
+        // Detect if bash is ready for a new command
+        if (data.includes("[READY]")) {
+            this.isExpectingInput = false;
+            this.writeToTerminal("\r\n" + this.inputBuffer);
+        } else if (data.includes("[PROMPT]$ ")) {
+            this.isExpectingInput = false;
+        } else if (data.includes("[INPUT]> ")) {
+            this.isExpectingInput = true;
+        } else {
+            this.isExpectingInput = false;
+        }
+
+        // Write the actual shell output to the terminal
         this.writeToTerminal(data);
         this.commandOutputBuffer += data;
 
-        // Check if the output ends with a newline to determine if the prompt should be shown on a new line
-        if (data.endsWith("\n")) {
-            // Write a new line to the fileYMap and terminal before the prompt
-            this.commandOutputBuffer += "\r\n"; // Add an extra new line to the buffer
+        // Only show the prompt if not expecting further user input
+        if (!this.isExpectingInput) {
             this.writeToTerminal("\r\n" + this.inputBuffer);
-        } else {
-            // Write the prompt directly after the output if no newline is present
-            this.writeToTerminal(this.inputBuffer);
         }
 
-        // Sync the terminal content with the file and YMap
         this.syncFile();
     }
 
@@ -161,6 +168,9 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         const env = {
             ...process.env,
             TERM: "xterm-256color",
+            PS1: "[PROMPT]$ ", // Unique prompt marker for the main prompt
+            PS2: "[INPUT]> ", // Unique prompt marker for multiline inputs
+            PROMPT_COMMAND: `echo '[READY]'`, // Indicator for when a command finishes
         };
 
         try {
