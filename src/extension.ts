@@ -47,6 +47,82 @@ export function activate(context: vscode.ExtensionContext) {
             command: "coducate.copyRoomId",
             arguments: [roomId],
         };
+
+        // Capture the currently active file in the editor
+        const activeEditor = vscode.window.activeTextEditor;
+        const activeFilePath = activeEditor?.document.fileName;
+        const relativeFilePath = activeFilePath
+            ? disposableWebSocket.getRelativeFilePath(activeFilePath)
+            : null;
+
+        // Get cursor and selection positions
+        const position = activeEditor?.selections[0].active;
+        const selection = activeEditor?.selections[0];
+        const clientState = {
+            filePath: relativeFilePath,
+            cursorPosition: {
+                line: position?.line,
+                column: position?.character,
+            },
+            selectionRange: {
+                start: {
+                    line: selection?.start.line,
+                    column: selection?.start.character,
+                },
+                end: {
+                    line: selection?.end.line,
+                    column: selection?.end.character,
+                },
+            },
+        };
+
+        disposableWebSocket
+            .getAwareness()
+            .setLocalStateField("vsCodeClient", clientState);
+
+        // Send the currently active file to the server if available
+        const controlWebSocket = disposableWebSocket.getWebControlWebSocket();
+
+        if (controlWebSocket) {
+            // Attach an onopen event handler to send the instructor file once the connection is open
+            controlWebSocket.onopen = () => {
+                console.log("WebSocket connection opened.");
+                if (relativeFilePath) {
+                    try {
+                        controlWebSocket.send(
+                            JSON.stringify({
+                                type: "setInstructorFile",
+                                payload: {
+                                    roomId: roomId,
+                                    instructorFile: relativeFilePath,
+                                },
+                            })
+                        );
+                        console.log(
+                            `Instructor file sent: ${relativeFilePath}`
+                        );
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            "Failed to send instructor file: " +
+                                (error as Error).message
+                        );
+                        console.error("Error sending instructor file:", error);
+                    }
+                }
+            };
+
+            // If the WebSocket is already open, trigger the onopen event manually
+            if (controlWebSocket.readyState === WebSocket.OPEN) {
+                const mockEvent: Event = {
+                    target: controlWebSocket,
+                } as Event;
+                controlWebSocket.onopen(mockEvent);
+            }
+        } else {
+            vscode.window.showErrorMessage(
+                "WebSocket connection is not available."
+            );
+        }
     }
 
     const startCommand = vscode.commands.registerCommand(
@@ -94,6 +170,31 @@ export function activate(context: vscode.ExtensionContext) {
                 ? disposableWebSocket.getRelativeFilePath(activeFilePath)
                 : null;
 
+            // Get cursor and selection positions
+            const position = activeEditor?.selections[0].active;
+            const selection = activeEditor?.selections[0];
+            const clientState = {
+                filePath: relativeFilePath,
+                cursorPosition: {
+                    line: position?.line,
+                    column: position?.character,
+                },
+                selectionRange: {
+                    start: {
+                        line: selection?.start.line,
+                        column: selection?.start.character,
+                    },
+                    end: {
+                        line: selection?.end.line,
+                        column: selection?.end.character,
+                    },
+                },
+            };
+
+            disposableWebSocket
+                .getAwareness()
+                .setLocalStateField("vsCodeClient", clientState);
+
             context.subscriptions.push(disposableWebSocket);
             status.text = "$(sync) Coducate";
             vscode.window.showInformationMessage(
@@ -123,7 +224,9 @@ export function activate(context: vscode.ExtensionContext) {
             // Write the content to coducateSetup.jsonc
             fs.writeFileSync(setupFilePath, setupContent);
 
-            await disposableWebSocket.addTemporaryFileToYMap();
+            await disposableWebSocket.addTemporaryFileToYMap(
+                "coducateSetup.jsonc"
+            );
 
             // Send the currently active file to the server if available
             const controlWebSocket =
