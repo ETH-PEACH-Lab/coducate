@@ -140,11 +140,13 @@ export function activate(context: vscode.ExtensionContext) {
             // Prompt user for task description and learning goals
             const taskDescription = await vscode.window.showInputBox({
                 prompt: "Enter the task description",
-                placeHolder: "What is the main goal of this session?",
+                placeHolder:
+                    "e.g., Simulate a simple bank account system with deposits and withdrawals.",
             });
             const learningGoalsInput = await vscode.window.showInputBox({
                 prompt: "Enter learning goals (comma-separated)",
-                placeHolder: "e.g., React, Input/Output, Unit Testing",
+                placeHolder:
+                    "e.g., Object-oriented Programming, State Management, Error Handling",
             });
 
             // Convert learning goals to an array
@@ -543,8 +545,8 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
-    const runPythonFile = vscode.commands.registerCommand(
-        "coducate.runPythonFile",
+    const runBashCommand = vscode.commands.registerCommand(
+        "coducate.runBash",
         async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
@@ -561,13 +563,13 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             const task = new vscode.Task(
-                { type: "runPython" },
+                { type: "runBash" },
                 vscode.TaskScope.Workspace,
-                "Run Python File with Output",
-                "custom",
+                "Running Bash",
+                "Emulated Terminal",
                 new vscode.CustomExecution(
                     async (): Promise<vscode.Pseudoterminal> =>
-                        new CaptureTerminal(filePath, disposableWebSocket!)
+                        new CaptureTerminal(disposableWebSocket!)
                 ),
                 []
             );
@@ -580,7 +582,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Command to request terminal open
-    const requestTerminalOpen = vscode.commands.registerCommand(
+    const requestTerminalOpenCommand = vscode.commands.registerCommand(
         "coducate.requestTerminalOpen",
         async () => {
             if (
@@ -667,7 +669,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Command to request terminal close
-    const requestTerminalClose = vscode.commands.registerCommand(
+    const requestTerminalCloseCommand = vscode.commands.registerCommand(
         "coducate.requestTerminalClose",
         async () => {
             if (
@@ -763,9 +765,9 @@ export function activate(context: vscode.ExtensionContext) {
         copyRoomIdCommand,
         grantWriteAccessCommand,
         revokeWriteAccessCommand,
-        runPythonFile,
-        requestTerminalOpen,
-        requestTerminalClose
+        runBashCommand,
+        requestTerminalOpenCommand,
+        requestTerminalCloseCommand
     );
 
     // Register CodeLens Provider
