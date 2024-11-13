@@ -27,6 +27,7 @@ export class DisposableWebSocket {
     private yDoc: Y.Doc;
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
+    private notebookFilePath: string;
 
     constructor(urlYjs: string, urlControlWebsocket: string, roomId: string) {
         this.roomId = roomId;
@@ -46,6 +47,9 @@ export class DisposableWebSocket {
         vscode.workspace.workspaceFolders?.forEach((folder) => {
             this.addAllFilesInDirectory(folder.uri.fsPath);
         });
+
+        this.notebookFilePath = path.join(os.tmpdir(), "coducateNotebook.txt");
+        fs.writeFileSync(this.notebookFilePath, "");
 
         this.setupVSCodeListeners();
     }
@@ -279,6 +283,40 @@ export class DisposableWebSocket {
                 }
             }
         });
+
+        // Listen to changes in notebook cells
+        vscode.workspace.onDidChangeNotebookDocument((event) => {
+            this.handleCellChanges(event);
+        });
+    }
+
+    private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
+        // Iterate over the changes to the notebook content
+        event.cellChanges.forEach((change) => {
+            // Handle only changes in cell outputs
+            if (change.outputs) {
+                const cell = change.cell;
+                const cellOutputs = this.getCellOutputs(cell);
+                const cellOutput = cellOutputs.join("\n");
+                if (cellOutput) {
+                    this.addOutputToYMap(this.notebookFilePath, cellOutput);
+                }
+            }
+        });
+    }
+
+    private getCellOutputs(cell: vscode.NotebookCell): string[] {
+        // Loop through the outputs and extract the text/plain MIME type
+        const outputs = [];
+        for (const output of cell.outputs) {
+            if (output.items) {
+                for (const item of output.items) {
+                    outputs.push(item.data.toString());
+                }
+            }
+        }
+
+        return outputs; // Return null if no plain text output is found
     }
 
     public addOutputToYMap(outputFilePath: string, content: string) {
@@ -289,13 +327,13 @@ export class DisposableWebSocket {
     }
 
     // Public method to expose addTmpFileToYMap functionality
-    public async addTemporaryFileToYMap() {
-        await this.addTmpFileToYMap();
+    public async addTemporaryFileToYMap(fileName: string) {
+        await this.addTmpFileToYMap(fileName);
     }
 
     // Function to add the /tmp file directly to fileYMap
-    private async addTmpFileToYMap() {
-        const tmpFilePath = path.join(os.tmpdir(), "coducateSetup.jsonc");
+    private async addTmpFileToYMap(fileName: string) {
+        const tmpFilePath = path.join(os.tmpdir(), fileName);
 
         // Check if file exists before trying to add it
         if (fs.existsSync(tmpFilePath)) {
