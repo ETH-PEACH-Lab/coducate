@@ -28,6 +28,7 @@ export class DisposableWebSocket {
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
     private notebookFilePath: string;
+    private hasExecutedOpenTerminal: boolean = false;
 
     constructor(urlYjs: string, urlControlWebsocket: string, roomId: string) {
         this.roomId = roomId;
@@ -287,6 +288,13 @@ export class DisposableWebSocket {
         // Listen to changes in notebook cells
         vscode.workspace.onDidChangeNotebookDocument((event) => {
             this.handleCellChanges(event);
+
+            // Execute the command only once on the first trigger
+            if (!this.hasExecutedOpenTerminal) {
+                // Request the terminal to open
+                vscode.commands.executeCommand("coducate.requestTerminalOpen");
+                this.hasExecutedOpenTerminal = true;
+            }
         });
     }
 
