@@ -44,8 +44,8 @@
                 "title": "Coducate: Revoke Write Access"
             },
             {
-                "command": "coducate.runPythonFile",
-                "title": "Coducate: Run Python File"
+                "command": "coducate.emulateTerminal",
+                "title": "Coducate: Emulate Terminal"
             },
             {
                 "command": "coducate.requestTerminalOpen",

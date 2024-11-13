@@ -545,8 +545,8 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
-    const runBashCommand = vscode.commands.registerCommand(
-        "coducate.runBash",
+    const emulateTerminalCommand = vscode.commands.registerCommand(
+        "coducate.emulateTerminal",
         async () => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
@@ -765,7 +765,7 @@ export function activate(context: vscode.ExtensionContext) {
         copyRoomIdCommand,
         grantWriteAccessCommand,
         revokeWriteAccessCommand,
-        runBashCommand,
+        emulateTerminalCommand,
         requestTerminalOpenCommand,
         requestTerminalCloseCommand
     );
