@@ -291,32 +291,77 @@ export class DisposableWebSocket {
     }
 
     private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
-        // Iterate over the changes to the notebook content
         event.cellChanges.forEach((change) => {
             // Handle only changes in cell outputs
             if (change.outputs) {
                 const cell = change.cell;
                 const cellOutputs = this.getCellOutputs(cell);
-                const cellOutput = cellOutputs.join("\n");
-                if (cellOutput) {
-                    this.addOutputToYMap(this.notebookFilePath, cellOutput);
+                if (cellOutputs.length > 0) {
+                    this.addOutputToYMap(
+                        this.notebookFilePath,
+                        JSON.stringify(cellOutputs)
+                    );
                 }
             }
         });
     }
 
-    private getCellOutputs(cell: vscode.NotebookCell): string[] {
-        // Loop through the outputs and extract the text/plain MIME type
+    private getCellOutputs(
+        cell: vscode.NotebookCell
+    ): { mime: string; data: string | Blob }[] {
         const outputs = [];
+
         for (const output of cell.outputs) {
             if (output.items) {
                 for (const item of output.items) {
-                    outputs.push(item.data.toString());
+                    const mimeType = this.getMimeType(item.mime);
+                    // Convert the UInt8Array to Base64 or Blob based on the data size
+                    const data = this.convertBinaryData(item.data, mimeType);
+                    outputs.push({
+                        mime: mimeType,
+                        data: data,
+                    });
                 }
             }
         }
 
-        return outputs; // Return null if no plain text output is found
+        return outputs;
+    }
+
+    // Helper function to determine the MIME type of the item based on its mime property
+    private getMimeType(mime: string): string {
+        if (mime.includes("image/png")) {
+            return "image/png";
+        }
+        if (mime.includes("image/jpeg")) {
+            return "image/jpeg";
+        }
+        if (mime.includes("image/gif")) {
+            return "image/gif";
+        }
+        if (mime.includes("text/html")) {
+            return "text/html";
+        }
+        if (mime.includes("application/json")) {
+            return "application/json";
+        }
+        return "text/plain"; // Default to text/plain if unknown mime
+    }
+
+    // Function to convert UInt8Array to either Base64 or Blob (for images)
+    private convertBinaryData(
+        uint8Array: Uint8Array,
+        mimeType: string
+    ): string | Blob {
+        const MAX_SIZE_FOR_BASE64 = 50000; // Define a threshold size for Base64 (adjust as needed)
+
+        // If the binary data is small, convert it to Base64
+        if (uint8Array.length < MAX_SIZE_FOR_BASE64) {
+            return Buffer.from(uint8Array).toString("base64");
+        } else {
+            // Otherwise, create a Blob (for larger files)
+            return new Blob([uint8Array], { type: mimeType });
+        }
     }
 
     public addOutputToYMap(outputFilePath: string, content: string) {
