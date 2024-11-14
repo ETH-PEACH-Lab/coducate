@@ -18,7 +18,6 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private commandOutputBuffer: string = ""; // Buffer for storing command outputs
     private shellProcess: ChildProcessWithoutNullStreams | null = null;
     private cwd: string = os.homedir();
-    private isExpectingInput: boolean = false;
 
     constructor(private disposableWebSocket: DisposableWebSocket) {
         this.outputFilePath = path.join(os.tmpdir(), "coducateOutput.txt");
@@ -50,7 +49,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     open(): void {
         // Write the initial prompt to the terminal and sync with fileYMap
         this.writeToTerminal(this.inputBuffer);
-        this.syncFile();
+        // this.syncFile();
         this.runShell();
     }
 
@@ -67,8 +66,18 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
                 this.writeToTerminal(`\r${this.inputBuffer}\r\n`);
                 const command = this.inputBuffer.slice(2).trim();
 
-                if (command === "clear") {
+                if (command.startsWith("cd ")) {
+                    // Handle `cd` command separately
+                    const targetDir = command.slice(3).trim();
+                    this.changeDirectory(targetDir);
+                } else if (command === "cd") {
+                    // Handle `cd` command without arguments
+                    this.changeDirectory("~");
+                } else if (command === "clear") {
                     this.clearTerminal();
+                } else if (command === "exit") {
+                    this.terminateShell();
+                    return;
                 } else if (command.length > 0) {
                     this.shellProcess?.stdin.write(command + "\n");
 
@@ -126,6 +135,74 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         }
     };
 
+    private terminateShell() {
+        const message = "Process completed.";
+
+        // Write the message to the terminal
+        this.commandOutputBuffer += `\r${this.inputBuffer}\r\nProcess completed.`;
+        this.writeToTerminal(message + "\r\n");
+
+        // Sync the file and YMap before closing
+        fs.writeFileSync(this.outputFilePath, this.commandOutputBuffer);
+        this.disposableWebSocket.addOutputToYMap(
+            this.outputFilePath,
+            this.commandOutputBuffer
+        );
+
+        // Terminate the shell process if it exists
+        if (this.shellProcess) {
+            this.shellProcess.kill();
+            this.shellProcess = null;
+        }
+
+        // Close the terminal
+        this.close();
+
+        // Close the terminal panel
+        vscode.commands.executeCommand(
+            "workbench.action.terminal.toggleTerminal"
+        );
+
+        // Request the terminal to open
+        vscode.commands.executeCommand("coducate.requestTerminalClose");
+    }
+
+    private changeDirectory(targetDir: string) {
+        // Record the `cd` command in the output buffer
+        this.commandOutputBuffer += `\r${this.inputBuffer}\r\n`;
+
+        let message = "";
+
+        // If no directory is specified, go to the home directory
+        if (targetDir === "~") {
+            console.log("targetDir: ", targetDir);
+            this.cwd = os.homedir();
+        } else {
+            const newPath = path.isAbsolute(targetDir)
+                ? targetDir
+                : path.join(this.cwd, targetDir);
+
+            if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
+                this.cwd = newPath;
+            } else {
+                message = `cd: no such file or directory: ${targetDir}\r\n`;
+            }
+        }
+
+        // Write the result to the terminal and the output buffer
+        this.writeToTerminal(message + "\r\n");
+        this.commandOutputBuffer += message + "\r\n";
+
+        // Write the updated prompt to the terminal
+        this.inputBuffer = defaultLine;
+        this.cursorPosition = this.inputBuffer.length;
+        this.runShell();
+        this.writeToTerminal(this.inputBuffer);
+
+        // Sync the updated buffer to the file and YMap
+        this.syncFile();
+    }
+
     // Helper function to redraw the input buffer after inserting/deleting characters
     private redrawInputBuffer() {
         // Clear the current line and rewrite the prompt and inputBuffer
@@ -140,26 +217,15 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     }
 
     private handleShellOutput(data: string) {
-        // Detect if bash is ready for a new command
-        if (data.includes("[READY]")) {
-            this.isExpectingInput = false;
-            this.writeToTerminal("\r\n" + this.inputBuffer);
-        } else if (data.includes("[PROMPT]$ ")) {
-            this.isExpectingInput = false;
-        } else if (data.includes("[INPUT]> ")) {
-            this.isExpectingInput = true;
-        } else {
-            this.isExpectingInput = false;
-        }
-
         // Write the actual shell output to the terminal
         this.writeToTerminal(data);
         this.commandOutputBuffer += data;
 
+        // Add a new line after each command output
+        this.commandOutputBuffer += "\r\n";
+
         // Only show the prompt if not expecting further user input
-        if (!this.isExpectingInput) {
-            this.writeToTerminal("\r\n" + this.inputBuffer);
-        }
+        this.writeToTerminal("\r\n" + this.inputBuffer);
 
         this.syncFile();
     }
@@ -168,9 +234,6 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         const env = {
             ...process.env,
             TERM: "xterm-256color",
-            PS1: "[PROMPT]$ ", // Unique prompt marker for the main prompt
-            PS2: "[INPUT]> ", // Unique prompt marker for multiline inputs
-            PROMPT_COMMAND: `echo '[READY]'`, // Indicator for when a command finishes
         };
 
         try {
