@@ -34,16 +34,12 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
             );
             if (activeWorkspaceFolder) {
                 this.cwd = activeWorkspaceFolder.uri.fsPath;
-                console.log(`Active workspace folder set to: ${this.cwd}`);
                 return;
             }
         }
 
         // Default to the home directory if no active workspace is found
         this.cwd = os.homedir();
-        console.log(
-            `No active workspace. Defaulting to home directory: ${this.cwd}`
-        );
     }
 
     open(): void {
@@ -217,7 +213,6 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
 
         // If no directory is specified, go to the home directory
         if (targetDir === "~") {
-            console.log("targetDir: ", targetDir);
             this.cwd = os.homedir();
         } else {
             const newPath = path.isAbsolute(targetDir)
