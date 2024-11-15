@@ -14,7 +14,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
 
     private outputFilePath: string;
     private inputBuffer: string = defaultLine; // The prompt for user input
-    private cursorPosition: number = this.inputBuffer.length; // Track cursor position
+    private cursorPosition: number = this.inputBuffer.length;
     private commandOutputBuffer: string = ""; // Buffer for storing command outputs
     private shellProcess: ChildProcessWithoutNullStreams | null = null;
     private cwd: string = os.homedir();
@@ -47,9 +47,8 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     }
 
     open(): void {
-        // Write the initial prompt to the terminal and sync with fileYMap
         this.writeToTerminal(this.inputBuffer);
-        // this.syncFile();
+        this.syncFile();
         this.runShell();
     }
 
@@ -67,11 +66,9 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
                 const command = this.inputBuffer.slice(2).trim();
 
                 if (command.startsWith("cd ")) {
-                    // Handle `cd` command separately
                     const targetDir = command.slice(3).trim();
                     this.changeDirectory(targetDir);
                 } else if (command === "cd") {
-                    // Handle `cd` command without arguments
                     this.changeDirectory("~");
                 } else if (command === "clear") {
                     this.clearTerminal();
@@ -135,6 +132,37 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         }
     };
 
+    private runShell() {
+        const env = {
+            ...process.env,
+            TERM: "xterm-256color",
+        };
+
+        try {
+            this.shellProcess = spawn("bash", [], {
+                cwd: this.cwd,
+                env: env,
+                stdio: ["pipe", "pipe", "pipe"],
+            });
+
+            this.shellProcess.stdout.on("data", (data) => {
+                this.handleShellOutput(data.toString());
+            });
+
+            this.shellProcess.stderr.on("data", (data) => {
+                this.handleShellOutput(data.toString());
+            });
+
+            this.shellProcess.on("close", () => {
+                this.writeToTerminal("\r\nProcess completed.\r\n");
+                this.close();
+            });
+        } catch (error: any) {
+            this.writeToTerminal(`Error spawning shell: ${error.message}\r\n`);
+            this.close();
+        }
+    }
+
     private terminateShell() {
         const message = "Process completed.";
 
@@ -165,6 +193,20 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
 
         // Request the terminal to open
         vscode.commands.executeCommand("coducate.requestTerminalClose");
+    }
+
+    private handleShellOutput(data: string) {
+        // Write the actual shell output to the terminal
+        this.writeToTerminal(data);
+        this.commandOutputBuffer += data;
+
+        // Add a new line after each command output
+        this.commandOutputBuffer += "\r\n";
+
+        // Only show the prompt if not expecting further user input
+        this.writeToTerminal("\r\n" + this.inputBuffer);
+
+        this.syncFile();
     }
 
     private changeDirectory(targetDir: string) {
@@ -216,51 +258,6 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         }
     }
 
-    private handleShellOutput(data: string) {
-        // Write the actual shell output to the terminal
-        this.writeToTerminal(data);
-        this.commandOutputBuffer += data;
-
-        // Add a new line after each command output
-        this.commandOutputBuffer += "\r\n";
-
-        // Only show the prompt if not expecting further user input
-        this.writeToTerminal("\r\n" + this.inputBuffer);
-
-        this.syncFile();
-    }
-
-    private runShell() {
-        const env = {
-            ...process.env,
-            TERM: "xterm-256color",
-        };
-
-        try {
-            this.shellProcess = spawn("bash", [], {
-                cwd: this.cwd,
-                env: env,
-                stdio: ["pipe", "pipe", "pipe"],
-            });
-
-            this.shellProcess.stdout.on("data", (data) => {
-                this.handleShellOutput(data.toString());
-            });
-
-            this.shellProcess.stderr.on("data", (data) => {
-                this.handleShellOutput(data.toString());
-            });
-
-            this.shellProcess.on("close", () => {
-                this.writeToTerminal("\r\nProcess completed.\r\n");
-                this.close();
-            });
-        } catch (error: any) {
-            this.writeToTerminal(`Error spawning shell: ${error.message}\r\n`);
-            this.close();
-        }
-    }
-
     private clearTerminal() {
         // Clear the command output buffer
         this.commandOutputBuffer = "";
@@ -269,7 +266,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         this.inputBuffer = defaultLine;
 
         // Clear the terminal display
-        this.writeEmitter.fire("\x1b[2J\x1b[H"); // Clears the terminal screen
+        this.writeEmitter.fire("\x1b[2J\x1b[H");
 
         // Write the prompt to the terminal after clearing
         this.writeToTerminal(this.inputBuffer);
@@ -282,8 +279,8 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         this.writeEmitter.fire(data.replace(/\n/g, "\r\n"));
     }
 
+    // Helper function to sync the command output buffer and input buffer to the output file
     private syncFile() {
-        // Combine the command output buffer and the current input buffer
         const fullContent = this.commandOutputBuffer + this.inputBuffer;
         fs.writeFileSync(this.outputFilePath, fullContent);
         this.disposableWebSocket.addOutputToYMap(
