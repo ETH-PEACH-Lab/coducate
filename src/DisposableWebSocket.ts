@@ -6,6 +6,7 @@ import * as fs from "fs";
 import { Awareness } from "y-protocols/awareness";
 import * as os from "os";
 import { WebSocket } from "ws";
+import { DiffWatcher } from "./DiffWatcher";
 
 const EXCLUDED_DIRECTORIES = new Set([
     "node_modules",
@@ -30,7 +31,12 @@ export class DisposableWebSocket {
     private notebookFilePath: string;
     private hasExecutedOpenTerminal: boolean = false;
 
-    constructor(urlYjs: string, urlControlWebsocket: string, roomId: string) {
+    constructor(
+        urlYjs: string,
+        urlControlWebsocket: string,
+        roomId: string,
+        context: vscode.ExtensionContext
+    ) {
         this.roomId = roomId;
         this.yDoc = new Y.Doc();
         this.provider = new WebsocketProvider(urlYjs, roomId, this.yDoc, {
@@ -43,6 +49,9 @@ export class DisposableWebSocket {
 
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
+
+        // Initialize the diff watcher
+        new DiffWatcher(this.fileYMap, context);
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
@@ -61,6 +70,10 @@ export class DisposableWebSocket {
 
     public getAwareness() {
         return this.awareness;
+    }
+
+    public getFileYMap() {
+        return this.fileYMap;
     }
 
     public getWebControlWebSocket() {
@@ -205,7 +218,8 @@ export class DisposableWebSocket {
                 if (
                     this.controlWebSocket &&
                     this.controlWebSocket.readyState === WebSocket.OPEN &&
-                    relativeFilePath
+                    relativeFilePath &&
+                    this.fileYMap.has(relativeFilePath)
                 ) {
                     try {
                         // Send the instructor file name to the server
@@ -224,10 +238,6 @@ export class DisposableWebSocket {
                     } catch (error) {
                         console.error("Error sending instructor file:", error);
                     }
-                } else {
-                    console.warn(
-                        "WebSocket connection is not open. Cannot send instructor file."
-                    );
                 }
             }
         });

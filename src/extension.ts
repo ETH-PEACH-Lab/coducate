@@ -32,7 +32,8 @@ export function activate(context: vscode.ExtensionContext) {
         disposableWebSocket = new DisposableWebSocket(
             "ws://localhost:1234/yjs",
             "ws://localhost:1234/control",
-            roomId
+            roomId,
+            context
         );
         context.subscriptions.push(disposableWebSocket);
         status.text = "$(sync) Coducate";
@@ -87,7 +88,10 @@ export function activate(context: vscode.ExtensionContext) {
             // Attach an onopen event handler to send the instructor file once the connection is open
             controlWebSocket.onopen = () => {
                 console.log("WebSocket connection opened.");
-                if (relativeFilePath) {
+                if (
+                    relativeFilePath &&
+                    disposableWebSocket?.getFileYMap().has(relativeFilePath)
+                ) {
                     try {
                         controlWebSocket.send(
                             JSON.stringify({
@@ -162,7 +166,8 @@ export function activate(context: vscode.ExtensionContext) {
             disposableWebSocket = new DisposableWebSocket(
                 "ws://localhost:1234/yjs",
                 "ws://localhost:1234/control",
-                roomId
+                roomId,
+                context
             );
 
             // Capture the currently active file in the editor
@@ -238,7 +243,10 @@ export function activate(context: vscode.ExtensionContext) {
                 // Attach an onopen event handler to send the instructor file once the connection is open
                 controlWebSocket.onopen = () => {
                     console.log("WebSocket connection opened.");
-                    if (relativeFilePath) {
+                    if (
+                        relativeFilePath &&
+                        disposableWebSocket?.getFileYMap().has(relativeFilePath)
+                    ) {
                         try {
                             controlWebSocket.send(
                                 JSON.stringify({
@@ -555,7 +563,6 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             const document = editor.document;
-            const filePath = document.uri.fsPath;
 
             if (!disposableWebSocket) {
                 vscode.window.showErrorMessage("WebSocket is not initialized.");
