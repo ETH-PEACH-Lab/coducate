@@ -306,6 +306,13 @@ export class DisposableWebSocket {
                 this.hasExecutedOpenTerminal = true;
             }
         });
+
+        // Listen to notebook close events
+        vscode.workspace.onDidCloseNotebookDocument(() => {
+            // Request the terminal to close
+            vscode.commands.executeCommand("coducate.requestTerminalClose");
+            this.hasExecutedOpenTerminal = false;
+        });
     }
 
     private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
