@@ -7,6 +7,9 @@ import { DisposableWebSocket } from "./DisposableWebSocket";
 import { CaptureTerminal } from "./CaptureTerminal";
 import { HideCodeLensProvider } from "./HideCodeLensProvider";
 import { HideCodeHoverProvider } from "./HideCodeHoverProvider";
+import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
+import { renderPrompt } from "@vscode/prompt-tsx";
+import { AutocompletePrompt } from "./AutocompletePrompt";
 
 let disposableWebSocket: DisposableWebSocket | undefined;
 const ROOM_ID_KEY = "coducateRoomId";
@@ -764,6 +767,339 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    let cachedResponse: { [filePath: string]: string | null } = {};
+    let suggestionsEnabled = false;
+
+    const notesCodeLensProvider = new NotesCodeLensProvider();
+
+    // Command to create notes from selected text and delete the entire lines
+    const createNotesCommand = vscode.commands.registerCommand(
+        "coducate.createNotes",
+        async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const selection = editor.selection;
+                const filePath = editor.document.uri.fsPath;
+
+                if (!selection.isEmpty) {
+                    const title = await vscode.window.showInputBox({
+                        prompt: "Enter a title for the CodeLens",
+                        placeHolder: "Notes available",
+                    });
+
+                    if (!title) {
+                        vscode.window.showWarningMessage(
+                            "CodeLens title cannot be empty."
+                        );
+                        return;
+                    }
+
+                    const startLine = selection.start.line;
+                    const endLine = selection.end.line;
+
+                    const fullLineRange = new vscode.Range(
+                        new vscode.Position(startLine, 0),
+                        new vscode.Position(
+                            endLine,
+                            editor.document.lineAt(endLine).range.end.character
+                        )
+                    );
+                    const selectedCode = editor.document.getText(fullLineRange);
+
+                    if (!notesCodeLensProvider.storedNotes[filePath]) {
+                        notesCodeLensProvider.storedNotes[filePath] = [];
+                    }
+
+                    notesCodeLensProvider.storedNotes[filePath].push({
+                        line: startLine,
+                        code: selectedCode,
+                        title: title,
+                    });
+
+                    await editor.edit((editBuilder) => {
+                        editBuilder.delete(fullLineRange);
+                    });
+
+                    vscode.window.showInformationMessage(
+                        `Notes created at lines ${startLine + 1} to ${
+                            endLine + 1
+                        }.`
+                    );
+                    vscode.commands.executeCommand("coducate.refreshCodeLens");
+                } else {
+                    vscode.window.showInformationMessage("No code selected.");
+                }
+            }
+        }
+    );
+
+    // Command to restore code from the note
+    const restoreNoteCommand = vscode.commands.registerCommand(
+        "coducate.restoreNote",
+        async (filePath: string, line: number) => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                return;
+            }
+
+            const notes = notesCodeLensProvider.storedNotes[filePath];
+            if (!notes) {
+                return;
+            }
+
+            const noteIndex = notes.findIndex((n) => n.line === line);
+            if (noteIndex === -1) {
+                return;
+            }
+
+            const note = notes[noteIndex];
+
+            // Get the current cursor position
+            const cursorPosition = editor.selection.active;
+
+            // Compute the position of the line start where the cursor is
+            const cursorLineStartPosition = new vscode.Position(
+                cursorPosition.line,
+                0
+            );
+
+            // Compute the number of tabs (indention) of the cursor
+            const lineText = editor.document.lineAt(cursorPosition.line).text;
+            const indentation = lineText.match(/^\t*/)?.[0].length || 0;
+
+            // Adjust the indentation of the note.code based on the current indentation level
+            const adjustedCode = note.code.replace(
+                /\t/g,
+                "\t".repeat(indentation)
+            );
+
+            // Insert the code block exactly as it was captured, starting at the current cursor position
+            await editor.edit((editBuilder) => {
+                editBuilder.insert(cursorLineStartPosition, adjustedCode);
+            });
+
+            // Remove the note from storage
+            notes.splice(noteIndex, 1);
+            notesCodeLensProvider.refresh();
+
+            const numberOfLines = note.code.split("\n").length;
+            vscode.window.showInformationMessage(
+                `Code restored at lines ${
+                    cursorLineStartPosition.line + 1
+                } to ${cursorLineStartPosition.line + numberOfLines}.`
+            );
+        }
+    );
+
+    // Register the refresh CodeLens command
+    const refreshCodeLensCommand = vscode.commands.registerCommand(
+        "coducate.refreshCodeLens",
+        () => {
+            notesCodeLensProvider.refresh();
+        }
+    );
+
+    // Command to toggle suggestions on or off
+    const toggleSuggestionsCommand = vscode.commands.registerCommand(
+        "coducate.toggleSuggestions",
+        () => {
+            suggestionsEnabled = !suggestionsEnabled;
+            vscode.window.showInformationMessage(
+                `Code suggestions ${
+                    suggestionsEnabled ? "enabled" : "disabled"
+                }.`
+            );
+        }
+    );
+
+    // Function to generate code suggestions using the Language Model API
+    async function getLanguageModelSuggestions(
+        note: string,
+        typedText: string
+    ): Promise<string | null> {
+        try {
+            const models = await vscode.lm.selectChatModels({
+                vendor: "copilot",
+                family: "gpt-4o-mini",
+            });
+
+            if (models.length === 0) {
+                vscode.window.showErrorMessage("No language models available.");
+                return null;
+            }
+
+            const [model] = models;
+
+            const { messages } = await renderPrompt(
+                AutocompletePrompt,
+                {
+                    note: note,
+                    typedText: typedText,
+                },
+                { modelMaxPromptTokens: 4096 },
+                model
+            );
+
+            const response = await model.sendRequest(
+                messages,
+                {},
+                new vscode.CancellationTokenSource().token
+            );
+
+            let suggestion = "";
+            for await (const fragment of response.text) {
+                suggestion += fragment;
+            }
+
+            return suggestion;
+        } catch (err) {
+            console.error("Error fetching suggestions:", err);
+            return null;
+        }
+    }
+
+    // Find the most recent note that is above or on the same line as the current cursor position
+    function findRecentNoteAbove(
+        filePath: string,
+        currentLine: number
+    ): { line: number; code: string } | null {
+        const notes = notesCodeLensProvider.storedNotes[filePath];
+        if (!notes) {
+            return null;
+        }
+
+        // Filter for notes that are on the same line or above the current line
+        const validNotes = notes.filter((note) => note.line <= currentLine);
+
+        // Find the most recent (highest line number) among valid notes
+        const recentNote = validNotes.reduce(
+            (prev, curr) => (curr.line > prev.line ? curr : prev),
+            validNotes[0]
+        );
+
+        return recentNote || null;
+    }
+
+    function startsWithIgnoringWhitespace(
+        noteContent: string,
+        typedText: string
+    ) {
+        // Remove all whitespace from both strings
+        const normalize = (str: string) => str.replace(/\s+/g, "");
+        return normalize(noteContent).startsWith(normalize(typedText));
+    }
+
+    function codeDifference(note: string, typedText: string) {
+        const cleanNoteContent = note.replace(/[ \t]+\n/g, "\n");
+        const cleanTypedText = typedText.replace(/[ \t]+\n/g, "\n");
+        return cleanNoteContent
+            .trimStart()
+            .slice(cleanTypedText.trimStart().length);
+    }
+
+    // Inline completion provider using cached suggestions and LLM
+    const inlineCompletionProvider: vscode.InlineCompletionItemProvider = {
+        async provideInlineCompletionItems(
+            document: vscode.TextDocument,
+            position: vscode.Position,
+            context: vscode.InlineCompletionContext,
+            token: vscode.CancellationToken
+        ) {
+            if (!suggestionsEnabled) {
+                return [];
+            }
+
+            const filePath = document.uri.fsPath;
+            const line = position.line;
+
+            // Find the most recent note that is above or on the same line as the current cursor position
+            const recentNote = findRecentNoteAbove(filePath, line);
+            if (!recentNote) {
+                return [];
+            }
+
+            // Capture the user's typed text from the note's starting line to the current cursor position
+            const noteStartPosition = new vscode.Position(recentNote.line, 0);
+            const typedRange = new vscode.Range(noteStartPosition, position);
+            const typedText = document.getText(typedRange);
+
+            console.log("Code (Note Content):\n", recentNote.code);
+
+            const noteSuggestion = recentNote.code;
+
+            // 1. If the user's input matches the stored notes, show the remaining notes
+            if (startsWithIgnoringWhitespace(noteSuggestion, typedText)) {
+                const trimmedSuggestion = codeDifference(
+                    noteSuggestion,
+                    typedText
+                );
+                console.log("*******************************************");
+                console.log("Showing suggestion from Notes");
+                console.log("Typed text:\n", typedText);
+                console.log("Suggestion:\n", noteSuggestion);
+                console.log("Trimmed suggestion:\n", trimmedSuggestion);
+                console.log("*******************************************");
+                const item = new vscode.InlineCompletionItem(trimmedSuggestion);
+                item.range = new vscode.Range(position, position);
+                return [item];
+            }
+
+            // 2. Check the cached LLM suggestion
+            const cachedSuggestion = cachedResponse[filePath];
+            if (
+                cachedSuggestion &&
+                startsWithIgnoringWhitespace(cachedSuggestion, typedText)
+            ) {
+                console.log("*******************************************");
+                console.log("Using cached LLM suggestion");
+                console.log("Typed text:\n", typedText);
+
+                const trimmedSuggestion = codeDifference(
+                    cachedSuggestion,
+                    typedText
+                );
+                console.log("Suggestion (cached):\n", cachedSuggestion);
+                console.log("Trimmed suggestion:\n", trimmedSuggestion);
+                console.log("*******************************************");
+                const item = new vscode.InlineCompletionItem(trimmedSuggestion);
+                item.range = new vscode.Range(position, position);
+                return [item];
+            }
+
+            // 3. Fetch a new LLM suggestion if no valid cached suggestion is available
+            const newSuggestion = await getLanguageModelSuggestions(
+                noteSuggestion,
+                typedText
+            );
+            if (newSuggestion) {
+                console.log("*******************************************");
+                console.log("Fetching new LLM Suggestion:\n", newSuggestion);
+                console.log("Typed text:\n", typedText);
+
+                if (!startsWithIgnoringWhitespace(newSuggestion, typedText)) {
+                    console.log("Drop invalid suggestion");
+                    console.log("*******************************************");
+                    return;
+                }
+
+                const trimmedSuggestion = codeDifference(
+                    newSuggestion,
+                    typedText
+                );
+
+                console.log("Trimmed suggestion:\n", trimmedSuggestion);
+                console.log("*******************************************");
+
+                cachedResponse[filePath] = newSuggestion; // Cache the new suggestion
+                const item = new vscode.InlineCompletionItem(trimmedSuggestion);
+                item.range = new vscode.Range(position, position);
+                return [item];
+            }
+
+            return [];
+        },
+    };
+
     context.subscriptions.push(
         startCommand,
         endCommand,
@@ -774,22 +1110,26 @@ export function activate(context: vscode.ExtensionContext) {
         revokeWriteAccessCommand,
         emulateTerminalCommand,
         requestTerminalOpenCommand,
-        requestTerminalCloseCommand
-    );
+        requestTerminalCloseCommand,
+        createNotesCommand,
+        restoreNoteCommand,
+        refreshCodeLensCommand,
+        toggleSuggestionsCommand,
 
-    // Register CodeLens Provider
-    const codeLensDisposable = vscode.languages.registerCodeLensProvider(
-        "*",
-        hideCodeLensProvider
+        vscode.languages.registerInlineCompletionItemProvider(
+            { pattern: "**" },
+            inlineCompletionProvider
+        ),
+        vscode.languages.registerCodeLensProvider(
+            { pattern: "**" },
+            notesCodeLensProvider
+        ),
+        vscode.languages.registerHoverProvider(
+            "*",
+            new HideCodeHoverProvider(hideCodeLensProvider)
+        ),
+        vscode.languages.registerCodeLensProvider("*", hideCodeLensProvider)
     );
-    context.subscriptions.push(codeLensDisposable);
-
-    // Register Hover Provider for previewing hidden code
-    const hoverProviderDisposable = vscode.languages.registerHoverProvider(
-        "*",
-        new HideCodeHoverProvider(hideCodeLensProvider)
-    );
-    context.subscriptions.push(hoverProviderDisposable);
 }
 
 export function deactivate() {
