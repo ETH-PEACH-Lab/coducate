@@ -4,7 +4,7 @@
     "description": "An extension for live coding sessions.",
     "version": "0.0.1",
     "engines": {
-        "vscode": "^1.94.0"
+        "vscode": "^1.95.0"
     },
     "categories": [
         "Other"
@@ -54,6 +54,14 @@
             {
                 "command": "coducate.requestTerminalClose",
                 "title": "Coducate: Close Terminal"
+            },
+            {
+                "command": "coducate.createNotes",
+                "title": "Coducate: Create Notes"
+            },
+            {
+                "command": "coducate.toggleSuggestions",
+                "title": "Coducate: Toggle Suggestions"
             }
         ]
     },
@@ -74,7 +82,7 @@
     "devDependencies": {
         "@types/mocha": "^10.0.8",
         "@types/node": "20.x",
-        "@types/vscode": "^1.94.0",
+        "@types/vscode": "^1.95.0",
         "@types/ws": "^8.5.12",
         "@typescript-eslint/eslint-plugin": "^8.7.0",
         "@typescript-eslint/parser": "^8.7.0",
@@ -82,10 +90,11 @@
         "@vscode/test-electron": "^2.4.1",
         "esbuild": "^0.24.0",
         "eslint": "^9.11.1",
-        "npm-run-all": "^4.1.5",
+        "npm-run-all": "^2.1.0",
         "typescript": "^5.6.2"
     },
     "dependencies": {
+        "@vscode/prompt-tsx": "^0.3.0-alpha.13",
         "ws": "^8.18.0",
         "y-websocket": "^2.0.4",
         "yjs": "^13.6.20"
