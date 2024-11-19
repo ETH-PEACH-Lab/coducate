@@ -12,6 +12,11 @@
         // "noUnusedParameters": true,  /* Report errors on unused parameters. */
 
         // added to fix yjs and y-websocket imports
-        "moduleResolution": "bundler" // and changed module from Node16 to ESNext
+        "moduleResolution": "bundler", // and changed module from Node16 to ESNext
+
+        // added to use prompt-tsx for prompt engineering
+        "jsx": "react",
+        "jsxFactory": "vscpp",
+        "jsxFragmentFactory": "vscppf"
     }
 }
