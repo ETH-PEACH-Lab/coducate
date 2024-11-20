@@ -56,8 +56,12 @@
                 "title": "Coducate: Close Terminal"
             },
             {
-                "command": "coducate.createNotes",
-                "title": "Coducate: Create Notes"
+                "command": "coducate.createNote",
+                "title": "Coducate: Create Note"
+            },
+            {
+                "command": "coducate.removeNote",
+                "title": "Coducate: Remove Notes"
             },
             {
                 "command": "coducate.toggleSuggestions",

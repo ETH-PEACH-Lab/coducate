@@ -14,10 +14,16 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
 
     private context: vscode.ExtensionContext;
     private roomId: string;
+    private getRelativeFilePath: (filePath: string) => string;
 
-    constructor(context: vscode.ExtensionContext, roomId: string) {
+    constructor(
+        context: vscode.ExtensionContext,
+        roomId: string,
+        getRelativeFilePath: (filePath: string) => string
+    ) {
         this.context = context;
         this.roomId = roomId;
+        this.getRelativeFilePath = getRelativeFilePath;
 
         // Load notes on initialization
         this.loadNotes();
@@ -70,6 +76,39 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
 
         this.saveNotes();
         this.refresh();
+    }
+
+    public removeAllNotesInFile(filePath: string): void {
+        if (this.storedNotes[filePath]) {
+            delete this.storedNotes[filePath];
+            this.saveNotes();
+            this.refresh();
+            vscode.window.showInformationMessage(
+                `All notes removed from the file: ${this.getRelativeFilePath(
+                    filePath
+                )}`
+            );
+        } else {
+            vscode.window.showInformationMessage(
+                "No notes found in the specified file."
+            );
+        }
+    }
+
+    public removeAllNotesInWorkspace(): void {
+        const noteCount = Object.keys(this.storedNotes).length;
+        if (noteCount > 0) {
+            this.storedNotes = {};
+            this.saveNotes();
+            this.refresh();
+            vscode.window.showInformationMessage(
+                `All notes removed from the workspace (${noteCount} file(s)).`
+            );
+        } else {
+            vscode.window.showInformationMessage(
+                "No notes found in the workspace."
+            );
+        }
     }
 
     private saveNotes() {
