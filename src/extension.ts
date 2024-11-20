@@ -26,6 +26,11 @@ status.show();
 // CodeLens Provider for hiding code
 const hideCodeLensProvider = new HideCodeLensProvider();
 
+// CodeLens Provider for notes
+let notesCodeLensProvider: NotesCodeLensProvider | undefined;
+let cachedResponse: { [filePath: string]: string | null } = {};
+let suggestionsEnabled = false;
+
 export function activate(context: vscode.ExtensionContext) {
     status.text = "$(sync-ignored) Coducate";
     let roomId = context.globalState.get<string>(ROOM_ID_KEY);
@@ -130,6 +135,9 @@ export function activate(context: vscode.ExtensionContext) {
                 "WebSocket connection is not available."
             );
         }
+
+        // Load the notesCodeLensProvider
+        notesCodeLensProvider = new NotesCodeLensProvider(context, roomId);
     }
 
     const startCommand = vscode.commands.registerCommand(
@@ -767,11 +775,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
-    let cachedResponse: { [filePath: string]: string | null } = {};
-    let suggestionsEnabled = false;
-
-    const notesCodeLensProvider = new NotesCodeLensProvider();
-
     // Command to create notes from selected text and delete the entire lines
     const createNotesCommand = vscode.commands.registerCommand(
         "coducate.createNotes",
@@ -806,16 +809,14 @@ export function activate(context: vscode.ExtensionContext) {
                     );
                     const selectedCode = editor.document.getText(fullLineRange);
 
-                    if (!notesCodeLensProvider.storedNotes[filePath]) {
-                        notesCodeLensProvider.storedNotes[filePath] = [];
-                    }
-
-                    notesCodeLensProvider.storedNotes[filePath].push({
+                    // Add the note using the NotesCodeLensProvider's method
+                    notesCodeLensProvider?.addNote(filePath, {
                         line: startLine,
                         code: selectedCode,
                         title: title,
                     });
 
+                    // Delete the selected lines in the editor
                     await editor.edit((editBuilder) => {
                         editBuilder.delete(fullLineRange);
                     });
@@ -842,7 +843,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const notes = notesCodeLensProvider.storedNotes[filePath];
+            const notes = notesCodeLensProvider?.storedNotes[filePath];
             if (!notes) {
                 return;
             }
@@ -878,9 +879,8 @@ export function activate(context: vscode.ExtensionContext) {
                 editBuilder.insert(cursorLineStartPosition, adjustedCode);
             });
 
-            // Remove the note from storage
-            notes.splice(noteIndex, 1);
-            notesCodeLensProvider.refresh();
+            // Remove the note using the NotesCodeLensProvider's method
+            notesCodeLensProvider?.removeNote(filePath, line);
 
             const numberOfLines = note.code.split("\n").length;
             vscode.window.showInformationMessage(
@@ -895,7 +895,7 @@ export function activate(context: vscode.ExtensionContext) {
     const refreshCodeLensCommand = vscode.commands.registerCommand(
         "coducate.refreshCodeLens",
         () => {
-            notesCodeLensProvider.refresh();
+            notesCodeLensProvider?.refresh();
         }
     );
 
@@ -963,7 +963,7 @@ export function activate(context: vscode.ExtensionContext) {
         filePath: string,
         currentLine: number
     ): { line: number; code: string } | null {
-        const notes = notesCodeLensProvider.storedNotes[filePath];
+        const notes = notesCodeLensProvider?.storedNotes[filePath];
         if (!notes) {
             return null;
         }
@@ -1122,7 +1122,7 @@ export function activate(context: vscode.ExtensionContext) {
         ),
         vscode.languages.registerCodeLensProvider(
             { pattern: "**" },
-            notesCodeLensProvider
+            notesCodeLensProvider!
         ),
         vscode.languages.registerHoverProvider(
             "*",
