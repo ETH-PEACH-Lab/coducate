@@ -5,12 +5,18 @@ export class DiffWatcher {
     private fileYMap: Y.Map<Y.Text>;
     private diffButton: vscode.StatusBarItem;
     private diffFilesSet: Set<string> = new Set();
-    private openDiffEditors: Map<string, vscode.TextDocument> = new Map();
+    private openDiffEditors: Map<string, vscode.TextDocument> = new Map(); // Tracks open diff editors
     private context: vscode.ExtensionContext;
+    private roomId: string;
 
-    constructor(fileYMap: Y.Map<Y.Text>, context: vscode.ExtensionContext) {
+    constructor(
+        fileYMap: Y.Map<Y.Text>,
+        context: vscode.ExtensionContext,
+        roomId: string
+    ) {
         this.fileYMap = fileYMap;
         this.context = context;
+        this.roomId = roomId;
 
         // Create a status bar button for showing diffs
         this.diffButton = vscode.window.createStatusBarItem(
@@ -241,20 +247,16 @@ export class DiffWatcher {
         }
     }
 
-    // Save the set of files with differences to workspaceState
+    // Save the set of files with differences to workspaceState, scoped by roomId
     private saveDiffFiles() {
-        this.context.workspaceState.update(
-            "diffFilesSet",
-            Array.from(this.diffFilesSet)
-        );
+        const key = `diffFilesSet-${this.roomId}`;
+        this.context.workspaceState.update(key, Array.from(this.diffFilesSet));
     }
 
-    // Load the set of files with differences from workspaceState
+    // Load the set of files with differences from workspaceState, scoped by roomId
     private loadDiffFiles() {
-        const savedFiles = this.context.workspaceState.get<string[]>(
-            "diffFilesSet",
-            []
-        );
+        const key = `diffFilesSet-${this.roomId}`;
+        const savedFiles = this.context.workspaceState.get<string[]>(key, []);
         this.diffFilesSet = new Set(savedFiles);
         this.updateDiffButtonVisibility();
     }

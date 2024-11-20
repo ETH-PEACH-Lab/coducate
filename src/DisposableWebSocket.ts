@@ -51,7 +51,7 @@ export class DisposableWebSocket {
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
         // Initialize the diff watcher
-        new DiffWatcher(this.fileYMap, context);
+        new DiffWatcher(this.fileYMap, context, this.roomId);
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
