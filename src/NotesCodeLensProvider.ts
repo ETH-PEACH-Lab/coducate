@@ -45,7 +45,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             const range = new vscode.Range(note.line, 0, note.line, 0);
             const command: vscode.Command = {
                 title: note.title,
-                command: "coducate.restoreNote",
+                command: "coducate.handleNoteAction",
                 arguments: [filePath, note.line],
             };
             codeLenses.push(new vscode.CodeLens(range, command));

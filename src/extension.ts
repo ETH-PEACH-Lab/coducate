@@ -754,50 +754,60 @@ function registerCommands(
         }
     );
 
-    // Command to restore code from the note
-    const restoreNoteCommand = vscode.commands.registerCommand(
-        "coducate.restoreNote",
+    const handleNoteActionCommand = vscode.commands.registerCommand(
+        "coducate.handleNoteAction",
         async (filePath: string, line: number) => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
+                vscode.window.showErrorMessage("No active editor found.");
                 return;
             }
 
             const notes = notesCodeLensProvider?.storedNotes[filePath];
             if (!notes) {
+                vscode.window.showErrorMessage("No notes found for this file.");
                 return;
             }
 
-            const noteIndex = notes.findIndex((n) => n.line === line);
-            if (noteIndex === -1) {
+            const note = notes.find((n) => n.line === line);
+            if (!note) {
+                vscode.window.showErrorMessage("Note not found.");
                 return;
             }
 
-            const note = notes[noteIndex];
-
-            // Get the current cursor position
-            const cursorPosition = editor.selection.active;
-
-            // Compute the position of the line start where the cursor is
-            const cursorLineStartPosition = new vscode.Position(
-                cursorPosition.line,
-                0
+            // Prompt the user for an action
+            const choice = await vscode.window.showQuickPick(
+                [
+                    { label: "Insert at Cursor", value: "insert" },
+                    { label: "Delete Note", value: "delete" },
+                ],
+                { placeHolder: "What do you want to do with this note?" }
             );
 
-            // Insert the code block exactly as it was captured, starting at the current cursor position
-            await editor.edit((editBuilder) => {
-                editBuilder.insert(cursorLineStartPosition, note.code);
-            });
+            if (!choice) {
+                return; // User canceled
+            }
 
-            // Remove the note using the NotesCodeLensProvider's method
-            notesCodeLensProvider?.removeNote(filePath, line);
-
-            const numberOfLines = note.code.split("\n").length;
-            vscode.window.showInformationMessage(
-                `Code restored at lines ${
-                    cursorLineStartPosition.line + 1
-                } to ${cursorLineStartPosition.line + numberOfLines}.`
-            );
+            if (choice.value === "insert") {
+                const cursorPosition = editor.selection.active;
+                const cursorLineStartPosition = new vscode.Position(
+                    cursorPosition.line,
+                    0
+                );
+                await editor.edit((editBuilder) => {
+                    editBuilder.insert(cursorLineStartPosition, note.code);
+                });
+                const numberOfLines = note.code.split("\n").length;
+                vscode.window.showInformationMessage(
+                    `Code restored at lines ${
+                        cursorLineStartPosition.line + 1
+                    } to ${cursorLineStartPosition.line + numberOfLines}.`
+                );
+            } else if (choice.value === "delete") {
+                // Delete the note
+                notesCodeLensProvider?.removeNote(filePath, line);
+                vscode.window.showInformationMessage("Note deleted.");
+            }
         }
     );
 
@@ -915,7 +925,7 @@ function registerCommands(
         requestTerminalOpenCommand,
         requestTerminalCloseCommand,
         createNotesCommand,
-        restoreNoteCommand,
+        handleNoteActionCommand,
         removeNoteCommand,
         toggleSuggestionsCommand,
         hideCodeCommand,
