@@ -5,6 +5,7 @@ export class DiffWatcher {
     private fileYMap: Y.Map<Y.Text>;
     private diffButton: vscode.StatusBarItem;
     private diffFilesSet: Set<string> = new Set();
+    private openDiffEditors: Map<string, vscode.TextDocument> = new Map();
     private context: vscode.ExtensionContext;
 
     constructor(fileYMap: Y.Map<Y.Text>, context: vscode.ExtensionContext) {
@@ -59,6 +60,7 @@ export class DiffWatcher {
 
                     if (fileContent !== yTextContent) {
                         this.diffFilesSet.add(relativePath);
+                        this.refreshOpenDiffEditor(relativePath);
                     } else {
                         this.diffFilesSet.delete(relativePath);
                     }
@@ -103,16 +105,22 @@ export class DiffWatcher {
             fileUri
         );
 
-        // Create a temporary document with the Y.Text content
-        const yTextDocument = await vscode.workspace.openTextDocument({
-            content: yTextContent,
-        });
+        // Create or reuse a temporary document with the Y.Text content
+        let yTextDocument = this.openDiffEditors.get(relativePath);
+        if (!yTextDocument) {
+            yTextDocument = await vscode.workspace.openTextDocument({
+                content: yTextContent,
+            });
 
-        // Set the language of the temporary document to match the original document
-        await vscode.languages.setTextDocumentLanguage(
-            yTextDocument,
-            originalDocument.languageId
-        );
+            // Track this open diff editor
+            this.openDiffEditors.set(relativePath, yTextDocument);
+
+            // Set the language of the temporary document to match the original document
+            await vscode.languages.setTextDocumentLanguage(
+                yTextDocument,
+                originalDocument.languageId
+            );
+        }
 
         await vscode.commands.executeCommand(
             "vscode.diff",
@@ -134,6 +142,22 @@ export class DiffWatcher {
                     this.rejectDiff(relativePath);
                 }
             });
+    }
+
+    private async refreshOpenDiffEditor(relativePath: string) {
+        const yText = this.fileYMap.get(relativePath);
+        const yTextDocument = this.openDiffEditors.get(relativePath);
+
+        if (yText && yTextDocument) {
+            const yTextContent = yText.toString();
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                yTextDocument.uri,
+                new vscode.Range(0, 0, yTextDocument.lineCount, 0),
+                yTextContent
+            );
+            await vscode.workspace.applyEdit(edit);
+        }
     }
 
     private async acceptDiff(relativePath: string) {
@@ -165,6 +189,7 @@ export class DiffWatcher {
 
         // Remove the file from the diff set and save state
         this.diffFilesSet.delete(relativePath);
+        this.openDiffEditors.delete(relativePath);
         this.updateDiffButtonVisibility();
         this.saveDiffFiles();
 
@@ -194,6 +219,7 @@ export class DiffWatcher {
 
         // Remove the file from the diff set and save state
         this.diffFilesSet.delete(relativePath);
+        this.openDiffEditors.delete(relativePath);
         this.updateDiffButtonVisibility();
         this.saveDiffFiles();
 
