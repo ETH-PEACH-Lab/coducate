@@ -694,6 +694,126 @@ function registerCommands(
         }
     );
 
+    const adjustFontSizeCommand = vscode.commands.registerCommand(
+        "coducate.adjustFontSize",
+        async () => {
+            // Create a persistent QuickPick panel
+            const quickPick = vscode.window.createQuickPick();
+            quickPick.items = [
+                { label: "Increase Font Size" },
+                { label: "Decrease Font Size" },
+            ];
+            quickPick.title = "Adjust Font Size";
+            quickPick.placeholder =
+                "Select an action. Press Esc or click on editor to close the panel.";
+            quickPick.buttons = [vscode.QuickInputButtons.Back]; // Add a close button
+
+            quickPick.onDidTriggerButton(() => {
+                quickPick.hide();
+            });
+
+            quickPick.onDidChangeSelection(async (selection) => {
+                if (!selection[0]) {
+                    return;
+                }
+
+                const choice = selection[0].label;
+
+                if (
+                    disposableWebSocket &&
+                    disposableWebSocket.getWebControlWebSocket()
+                ) {
+                    const checkAccess = async () => {
+                        return new Promise((resolve, reject) => {
+                            const controlWebSocket =
+                                disposableWebSocket?.getWebControlWebSocket();
+                            if (
+                                controlWebSocket?.readyState === WebSocket.OPEN
+                            ) {
+                                const handleAccessResponse = (
+                                    message: string
+                                ) => {
+                                    try {
+                                        const { type, payload } =
+                                            JSON.parse(message);
+                                        if (
+                                            type === "fontSizeChanged" &&
+                                            payload.targetSimpleID === 1 &&
+                                            payload.roomId ===
+                                                disposableWebSocket?.getRoomId()
+                                        ) {
+                                            resolve(true);
+                                        }
+                                    } catch {
+                                        // Ignore invalid JSON messages
+                                    }
+                                };
+
+                                controlWebSocket.onmessage = (event) => {
+                                    try {
+                                        handleAccessResponse(
+                                            event.data.toString()
+                                        );
+                                    } catch {
+                                        // Ignore invalid JSON messages
+                                    }
+                                };
+
+                                controlWebSocket.send(
+                                    JSON.stringify({
+                                        type: "requestFontSizeChange",
+                                        payload: {
+                                            roomId: disposableWebSocket?.getRoomId(),
+                                            targetSimpleID: 1,
+                                            increase:
+                                                choice === "Increase Font Size",
+                                        },
+                                    })
+                                );
+
+                                setTimeout(() => {
+                                    reject(
+                                        new Error("Font size change timed out")
+                                    );
+                                }, 5000); // 5 seconds timeout
+                            } else {
+                                reject(
+                                    new Error(
+                                        "WebSocket connection is not open"
+                                    )
+                                );
+                            }
+                        });
+                    };
+
+                    try {
+                        const fontSizeChanged = await checkAccess();
+                        if (fontSizeChanged) {
+                            vscode.window.showInformationMessage(
+                                `Font size successfully ${
+                                    choice === "inc" ? "increased" : "decreased"
+                                }.`
+                            );
+                        }
+                    } catch (error) {
+                        if (error instanceof Error) {
+                            vscode.window.showErrorMessage(error.message);
+                        } else {
+                            vscode.window.showErrorMessage(String(error));
+                        }
+                    }
+                } else {
+                    vscode.window.showErrorMessage(
+                        "Invalid input or session not active."
+                    );
+                }
+            });
+
+            // Show the QuickPick
+            quickPick.show();
+        }
+    );
+
     // Command to create notes from selected text and delete the entire lines
     const createNotesCommand = vscode.commands.registerCommand(
         "coducate.createNote",
@@ -924,6 +1044,7 @@ function registerCommands(
         emulateTerminalCommand,
         requestTerminalOpenCommand,
         requestTerminalCloseCommand,
+        adjustFontSizeCommand,
         createNotesCommand,
         handleNoteActionCommand,
         removeNoteCommand,

@@ -56,6 +56,10 @@
                 "title": "Coducate: Close Terminal"
             },
             {
+                "command": "coducate.adjustFontSize",
+                "title": "Coducate: Change Font Size"
+            },
+            {
                 "command": "coducate.createNote",
                 "title": "Coducate: Create Note"
             },
