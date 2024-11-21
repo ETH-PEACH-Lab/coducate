@@ -142,7 +142,7 @@ function initializeSession(
         .setLocalStateField("vsCodeClient", clientState);
 
     // Send the currently active file to the server if available
-    const controlWebSocket = disposableWebSocket.getWebControlWebSocket();
+    const controlWebSocket = disposableWebSocket.getControlWebSocket();
 
     if (controlWebSocket) {
         // Attach an onopen event handler to send the instructor file once the connection is open
@@ -225,6 +225,18 @@ function registerCommands(
                 return;
             }
 
+            // Prompt user for a password
+            const password = await vscode.window.showInputBox({
+                prompt: "Enter a password for this session",
+                placeHolder: "A password is required to secure the session",
+                password: true,
+            });
+
+            if (!password) {
+                vscode.window.showErrorMessage("Password cannot be empty.");
+                return;
+            }
+
             // Prompt user for task description and learning goals
             const taskDescription = await vscode.window.showInputBox({
                 prompt: "Enter the task description",
@@ -271,8 +283,143 @@ function registerCommands(
             await disposableWebSocket.addTemporaryFileToYMap(
                 "coducateSetup.jsonc"
             );
+
+            // Securely hash the password before sending
+            if (password && disposableWebSocket.getControlWebSocket()) {
+                const controlWebSocket =
+                    disposableWebSocket.getControlWebSocket();
+
+                if (controlWebSocket.readyState === WebSocket.OPEN) {
+                    try {
+                        const passwordSuccessfullySet =
+                            await sendPasswordSecurely(
+                                controlWebSocket,
+                                password,
+                                newRoomId
+                            );
+                        if (passwordSuccessfullySet) {
+                            vscode.window.showInformationMessage(
+                                "Room password set securely."
+                            );
+                        }
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            "Failed to set room password securely."
+                        );
+                    }
+                } else if (
+                    controlWebSocket.readyState === WebSocket.CONNECTING
+                ) {
+                    controlWebSocket.addEventListener("open", async () => {
+                        try {
+                            const passwordSuccessfullySet =
+                                await sendPasswordSecurely(
+                                    controlWebSocket,
+                                    password,
+                                    newRoomId
+                                );
+                            if (passwordSuccessfullySet) {
+                                vscode.window.showInformationMessage(
+                                    "Room password set securely."
+                                );
+                            }
+                        } catch (error) {
+                            vscode.window.showErrorMessage(
+                                "Failed to set room password securely."
+                            );
+                        }
+                    });
+                } else {
+                    vscode.window.showErrorMessage(
+                        "WebSocket connection is not available. Please try again."
+                    );
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "Failed to set room password securely. WebSocket is not initialized."
+                );
+            }
         }
     );
+
+    // Helper function to securely send the password
+    async function sendPasswordSecurely(
+        controlWebSocket: WebSocket,
+        password: string,
+        roomId: string
+    ) {
+        return new Promise(async (resolve, reject) => {
+            const saltArray = new Uint8Array(16); // 16 bytes = 128 bits
+            crypto.getRandomValues(saltArray); // Populate array with random values
+            const salt = Array.from(saltArray)
+                .map((byte) => byte.toString(16).padStart(2, "0"))
+                .join(""); // Convert to hex string
+
+            // Derive key using PBKDF2
+            const encoder = new TextEncoder();
+            const passwordKey = await crypto.subtle.importKey(
+                "raw",
+                encoder.encode(password),
+                { name: "PBKDF2" },
+                false,
+                ["deriveBits"]
+            );
+            const derivedBits = await crypto.subtle.deriveBits(
+                {
+                    name: "PBKDF2",
+                    salt: encoder.encode(salt),
+                    iterations: 1000,
+                    hash: "SHA-256",
+                },
+                passwordKey,
+                256 // Output length in bits
+            );
+            const hash = Array.from(new Uint8Array(derivedBits))
+                .map((byte) => byte.toString(16).padStart(2, "0"))
+                .join(""); // Convert derived bits to hex string
+
+            const handleAccessResponse = (message: string) => {
+                try {
+                    const { type, payload } = JSON.parse(message);
+                    if (
+                        type === "roomPasswordSetResponse" &&
+                        payload.roomId === disposableWebSocket?.getRoomId()
+                    ) {
+                        // Access granted/denied from server response
+                        resolve(true);
+                        console.log("Room password successfully set");
+                    }
+                } catch {
+                    // Ignore invalid JSON messages
+                }
+            };
+
+            controlWebSocket.onmessage = (event) => {
+                try {
+                    handleAccessResponse(event.data.toString());
+                } catch {
+                    // Ignore invalid JSON messages
+                }
+            };
+
+            // Send password to server
+            controlWebSocket.send(
+                JSON.stringify({
+                    type: "setRoomPassword",
+                    payload: {
+                        roomId,
+                        password: hash,
+                        salt,
+                    },
+                })
+            );
+
+            // Add a timeout to resolve/reject in case of no response
+            setTimeout(() => {
+                reject(new Error("Set room password timed out"));
+            }, 5000); // 5 seconds timeout
+        });
+    }
 
     const endCommand = vscode.commands.registerCommand(
         "coducate.endSession",
@@ -313,12 +460,12 @@ function registerCommands(
             if (
                 targetSimpleID &&
                 disposableWebSocket &&
-                disposableWebSocket.getWebControlWebSocket()
+                disposableWebSocket.getControlWebSocket()
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getWebControlWebSocket();
+                            disposableWebSocket?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
@@ -404,12 +551,12 @@ function registerCommands(
             if (
                 targetSimpleID &&
                 disposableWebSocket &&
-                disposableWebSocket.getWebControlWebSocket()
+                disposableWebSocket.getControlWebSocket()
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getWebControlWebSocket();
+                            disposableWebSocket?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
@@ -524,12 +671,12 @@ function registerCommands(
         async () => {
             if (
                 disposableWebSocket &&
-                disposableWebSocket.getWebControlWebSocket()
+                disposableWebSocket.getControlWebSocket()
             ) {
                 const checkConnectionAndOpenTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getWebControlWebSocket();
+                            disposableWebSocket?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -611,12 +758,12 @@ function registerCommands(
         async () => {
             if (
                 disposableWebSocket &&
-                disposableWebSocket.getWebControlWebSocket()
+                disposableWebSocket.getControlWebSocket()
             ) {
                 const checkConnectionAndCloseTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getWebControlWebSocket();
+                            disposableWebSocket?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -694,6 +841,182 @@ function registerCommands(
         }
     );
 
+    // Command to request explorer open
+    const requestExplorerOpen = vscode.commands.registerCommand(
+        "coducate.requestExplorerOpen",
+        async () => {
+            if (
+                disposableWebSocket &&
+                disposableWebSocket.getControlWebSocket()
+            ) {
+                const checkConnectionAndOpenTerminal = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            disposableWebSocket?.getControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "explorerOpened" &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                        console.log(
+                                            "Explorer opened successfully"
+                                        );
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "requestExplorerOpen",
+                                    payload: {
+                                        roomId: disposableWebSocket?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error("Explorer open request timed out")
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const terminalOpened =
+                        await checkConnectionAndOpenTerminal();
+                    if (terminalOpened) {
+                        vscode.window.showInformationMessage(
+                            "Explorer opened successfully."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
+    // Command to request terminal close
+    const requestExplorerClose = vscode.commands.registerCommand(
+        "coducate.requestExplorerClose",
+        async () => {
+            if (
+                disposableWebSocket &&
+                disposableWebSocket.getControlWebSocket()
+            ) {
+                const checkConnectionAndCloseTerminal = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            disposableWebSocket?.getControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "explorerClosed" &&
+                                        payload.roomId ===
+                                            disposableWebSocket?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                        console.log(
+                                            "Explorer closed successfully"
+                                        );
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "requestExplorerClose",
+                                    payload: {
+                                        roomId: disposableWebSocket?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error(
+                                        "Explorer close request timed out"
+                                    )
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const terminalClosed =
+                        await checkConnectionAndCloseTerminal();
+                    if (terminalClosed) {
+                        vscode.window.showInformationMessage(
+                            "Explorer closed successfully."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
     const adjustFontSizeCommand = vscode.commands.registerCommand(
         "coducate.adjustFontSize",
         async () => {
@@ -721,12 +1044,12 @@ function registerCommands(
 
                 if (
                     disposableWebSocket &&
-                    disposableWebSocket.getWebControlWebSocket()
+                    disposableWebSocket.getControlWebSocket()
                 ) {
                     const checkAccess = async () => {
                         return new Promise((resolve, reject) => {
                             const controlWebSocket =
-                                disposableWebSocket?.getWebControlWebSocket();
+                                disposableWebSocket?.getControlWebSocket();
                             if (
                                 controlWebSocket?.readyState === WebSocket.OPEN
                             ) {
@@ -738,7 +1061,6 @@ function registerCommands(
                                             JSON.parse(message);
                                         if (
                                             type === "fontSizeChanged" &&
-                                            payload.targetSimpleID === 1 &&
                                             payload.roomId ===
                                                 disposableWebSocket?.getRoomId()
                                         ) {
@@ -764,7 +1086,6 @@ function registerCommands(
                                         type: "requestFontSizeChange",
                                         payload: {
                                             roomId: disposableWebSocket?.getRoomId(),
-                                            targetSimpleID: 1,
                                             increase:
                                                 choice === "Increase Font Size",
                                         },

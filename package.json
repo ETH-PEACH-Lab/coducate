@@ -56,6 +56,14 @@
                 "title": "Coducate: Close Terminal"
             },
             {
+                "command": "coducate.requestExplorerOpen",
+                "title": "Coducate: Open Explorer"
+            },
+            {
+                "command": "coducate.requestExplorerClose",
+                "title": "Coducate: Close Explorer"
+            },
+            {
                 "command": "coducate.adjustFontSize",
                 "title": "Coducate: Change Font Size"
             },

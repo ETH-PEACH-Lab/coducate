@@ -76,7 +76,7 @@ export class DisposableWebSocket {
         return this.fileYMap;
     }
 
-    public getWebControlWebSocket() {
+    public getControlWebSocket() {
         return this.controlWebSocket;
     }
 
