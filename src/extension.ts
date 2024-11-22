@@ -266,7 +266,10 @@ function registerCommands(
             } = initializeSession(context, newRoomId, status, true));
 
             // Path for coducateSetup.jsonc file in the /tmp directory
-            const setupFilePath = path.join(os.tmpdir(), "coducateSetup.jsonc");
+            const setupFilePath = path.join(
+                os.tmpdir(),
+                `coducateSetup_${newRoomId}.jsonc`
+            );
 
             // Create JSON content with comments
             const setupContent = `// This file contains the setup for task description and learning goals.
@@ -281,7 +284,7 @@ function registerCommands(
             fs.writeFileSync(setupFilePath, setupContent);
 
             await disposableWebSocket.addTemporaryFileToYMap(
-                "coducateSetup.jsonc"
+                `coducateSetup_${newRoomId}.jsonc`
             );
 
             // Securely hash the password before sending

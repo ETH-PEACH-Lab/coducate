@@ -58,7 +58,10 @@ export class DisposableWebSocket {
             this.addAllFilesInDirectory(folder.uri.fsPath);
         });
 
-        this.notebookFilePath = path.join(os.tmpdir(), "coducateNotebook.txt");
+        this.notebookFilePath = path.join(
+            os.tmpdir(),
+            `coducateNotebook_${this.roomId}.txt`
+        );
         fs.writeFileSync(this.notebookFilePath, "");
 
         this.setupVSCodeListeners();
