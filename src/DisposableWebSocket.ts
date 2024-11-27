@@ -7,6 +7,8 @@ import { Awareness } from "y-protocols/awareness";
 import * as os from "os";
 import { WebSocket } from "ws";
 import { DiffWatcher } from "./DiffWatcher";
+import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
+import { InlineCompletionProvider } from "./InlineCompletionProvider";
 
 const EXCLUDED_DIRECTORIES = new Set([
     "node_modules",
@@ -28,8 +30,12 @@ export class DisposableWebSocket {
     private yDoc: Y.Doc;
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
+    private diffWatcher: DiffWatcher;
     private notebookFilePath: string;
     private hasExecutedOpenTerminal: boolean = false;
+    private notesCodeLensProvider: NotesCodeLensProvider;
+    private inlineCompletionProvider: InlineCompletionProvider;
+    private disposables: vscode.Disposable[] = [];
 
     constructor(
         urlYjs: string,
@@ -51,7 +57,31 @@ export class DisposableWebSocket {
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
         // Initialize the diff watcher
-        new DiffWatcher(this.fileYMap, context, this.roomId);
+        this.diffWatcher = new DiffWatcher(this.fileYMap, context, this.roomId);
+
+        // Initialize providers
+        this.notesCodeLensProvider = new NotesCodeLensProvider(
+            context,
+            roomId,
+            this.getRelativeFilePath
+        );
+
+        this.inlineCompletionProvider = new InlineCompletionProvider(
+            this.notesCodeLensProvider
+        );
+
+        // Register providers
+        const codeLensDisposable = vscode.languages.registerCodeLensProvider(
+            { pattern: "**" },
+            this.notesCodeLensProvider
+        );
+        const inlineCompletionDisposable =
+            vscode.languages.registerInlineCompletionItemProvider(
+                { pattern: "**" },
+                this.inlineCompletionProvider
+            );
+
+        this.disposables.push(codeLensDisposable, inlineCompletionDisposable);
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
@@ -85,6 +115,14 @@ export class DisposableWebSocket {
 
     public getRoomId() {
         return this.roomId;
+    }
+
+    public getNotesCodeLensProvider(): NotesCodeLensProvider {
+        return this.notesCodeLensProvider;
+    }
+
+    public getInlineCompletionProvider(): InlineCompletionProvider {
+        return this.inlineCompletionProvider;
     }
 
     public getRelativeFilePath(filePath: string): string {
@@ -558,5 +596,9 @@ export class DisposableWebSocket {
         this.provider.destroy();
         this.yDoc.destroy();
         this.awareness.setLocalState(null);
+        this.controlWebSocket.close();
+        this.diffWatcher.dispose();
+        this.disposables.forEach((disposable) => disposable.dispose());
+        this.disposables = [];
     }
 }

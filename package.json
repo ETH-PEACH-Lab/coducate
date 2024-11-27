@@ -24,14 +24,6 @@
                 "title": "Coducate: End Session"
             },
             {
-                "command": "coducate.hideCode",
-                "title": "Coducate: Hide Code"
-            },
-            {
-                "command": "coducate.showCode",
-                "title": "Coducate: Show Code"
-            },
-            {
                 "command": "coducate.copyRoomId",
                 "title": "Coducate: Copy Room ID"
             },

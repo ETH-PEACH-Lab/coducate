@@ -8,9 +8,8 @@ interface INote {
 
 export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     public storedNotes: { [filePath: string]: INote[] } = {};
-    private onDidChangeCodeLensesEmitter = new vscode.EventEmitter<void>();
-    public readonly onDidChangeCodeLenses =
-        this.onDidChangeCodeLensesEmitter.event;
+    private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
+    public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 
     private context: vscode.ExtensionContext;
     private roomId: string;
@@ -30,7 +29,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     }
 
     public refresh() {
-        this.onDidChangeCodeLensesEmitter.fire();
+        this._onDidChangeCodeLenses.fire();
     }
 
     provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {

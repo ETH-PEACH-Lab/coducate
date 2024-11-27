@@ -20,7 +20,10 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private cwd: string = os.homedir();
 
     constructor(private disposableWebSocket: DisposableWebSocket) {
-        this.outputFilePath = path.join(os.tmpdir(), "coducateOutput.txt");
+        this.outputFilePath = path.join(
+            os.tmpdir(),
+            `coducateOutput_${disposableWebSocket.getRoomId()}.txt`
+        );
         this.clearFile();
         this.setCwd();
     }

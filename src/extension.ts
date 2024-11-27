@@ -2,25 +2,18 @@ import * as vscode from "vscode";
 import path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { WebSocket, Event } from "ws";
+import { WebSocket } from "ws";
 import { DisposableWebSocket } from "./DisposableWebSocket";
 import { CaptureTerminal } from "./CaptureTerminal";
-import { HideCodeLensProvider } from "./HideCodeLensProvider";
-import { HideCodeHoverProvider } from "./HideCodeHoverProvider";
-import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
-import { InlineCompletionProvider } from "./InlineCompletionProvider";
 
 const ROOM_ID_KEY = "coducateRoomId";
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("Coducate extension is now active.");
     let disposableWebSocket: DisposableWebSocket | undefined;
-    let notesCodeLensProvider: NotesCodeLensProvider | undefined;
-    let inlineCompletionProvider: InlineCompletionProvider | undefined;
-    let hideCodeLensProvider: HideCodeLensProvider | undefined;
 
     // Create the status bar item
-    const status = vscode.window.createStatusBarItem(
+    let status = vscode.window.createStatusBarItem(
         vscode.StatusBarAlignment.Right,
         100
     );
@@ -29,33 +22,17 @@ export function activate(context: vscode.ExtensionContext) {
     status.show();
     context.subscriptions.push(status);
 
-    // Initialize WebSocket and NotesCodeLensProvider if a roomId exists (restore session)
+    // Restore session if a roomId exists
     const roomId = context.globalState.get<string>(ROOM_ID_KEY);
     if (roomId) {
-        ({
-            disposableWebSocket,
-            notesCodeLensProvider,
-            inlineCompletionProvider,
-            hideCodeLensProvider,
-        } = initializeSession(context, roomId, status, true));
+        disposableWebSocket = initializeSession(context, roomId, status, true);
     }
 
     // Register commands
     registerCommands(context, {
         disposableWebSocket,
-        notesCodeLensProvider,
-        inlineCompletionProvider,
-        hideCodeLensProvider,
         status,
     });
-
-    // Register providers
-    registerProviders(
-        context,
-        notesCodeLensProvider,
-        inlineCompletionProvider,
-        hideCodeLensProvider
-    );
 }
 
 /**
@@ -66,12 +43,7 @@ function initializeSession(
     roomId: string,
     status: vscode.StatusBarItem,
     wasConnected: boolean
-): {
-    disposableWebSocket: DisposableWebSocket;
-    notesCodeLensProvider: NotesCodeLensProvider;
-    inlineCompletionProvider: InlineCompletionProvider;
-    hideCodeLensProvider: HideCodeLensProvider;
-} {
+): DisposableWebSocket {
     const disposableWebSocket = new DisposableWebSocket(
         "ws://localhost:1234/yjs",
         "ws://localhost:1234/control",
@@ -80,16 +52,6 @@ function initializeSession(
     );
 
     context.subscriptions.push(disposableWebSocket);
-
-    const notesCodeLensProvider = new NotesCodeLensProvider(
-        context,
-        roomId,
-        disposableWebSocket.getRelativeFilePath
-    );
-    const inlineCompletionProvider = new InlineCompletionProvider(
-        notesCodeLensProvider
-    );
-    const hideCodeLensProvider = new HideCodeLensProvider();
 
     status.text = "$(sync) Coducate";
     status.tooltip = roomId;
@@ -143,15 +105,29 @@ function initializeSession(
 
     // Send the currently active file to the server if available
     const controlWebSocket = disposableWebSocket.getControlWebSocket();
-
-    if (controlWebSocket) {
-        // Attach an onopen event handler to send the instructor file once the connection is open
-        controlWebSocket.onopen = () => {
-            console.log("WebSocket connection opened.");
-            if (
-                relativeFilePath &&
-                disposableWebSocket?.getFileYMap().has(relativeFilePath)
-            ) {
+    if (controlWebSocket.readyState === WebSocket.OPEN) {
+        if (relativeFilePath) {
+            try {
+                controlWebSocket.send(
+                    JSON.stringify({
+                        type: "setInstructorFile",
+                        payload: {
+                            roomId: roomId,
+                            instructorFile: relativeFilePath,
+                        },
+                    })
+                );
+                console.log(`Instructor file sent: ${relativeFilePath}`);
+            } catch (error) {
+                vscode.window.showErrorMessage(
+                    "Failed to send instructor file: " +
+                        (error as Error).message
+                );
+            }
+        }
+    } else if (controlWebSocket.readyState === WebSocket.CONNECTING) {
+        controlWebSocket.addEventListener("open", async () => {
+            if (relativeFilePath) {
                 try {
                     controlWebSocket.send(
                         JSON.stringify({
@@ -168,29 +144,15 @@ function initializeSession(
                         "Failed to send instructor file: " +
                             (error as Error).message
                     );
-                    console.error("Error sending instructor file:", error);
                 }
             }
-        };
-
-        // If the WebSocket is already open, trigger the onopen event manually
-        if (controlWebSocket.readyState === WebSocket.OPEN) {
-            const mockEvent: Event = {
-                target: controlWebSocket,
-            } as Event;
-            controlWebSocket.onopen(mockEvent);
-        }
+        });
     } else {
         vscode.window.showErrorMessage(
             "WebSocket connection is not available."
         );
     }
-    return {
-        disposableWebSocket,
-        notesCodeLensProvider,
-        inlineCompletionProvider,
-        hideCodeLensProvider,
-    };
+    return disposableWebSocket;
 }
 
 /**
@@ -200,19 +162,10 @@ function registerCommands(
     context: vscode.ExtensionContext,
     deps: {
         disposableWebSocket?: DisposableWebSocket;
-        notesCodeLensProvider?: NotesCodeLensProvider;
-        inlineCompletionProvider?: InlineCompletionProvider;
-        hideCodeLensProvider?: HideCodeLensProvider;
         status: vscode.StatusBarItem;
     }
 ) {
-    let {
-        disposableWebSocket,
-        notesCodeLensProvider,
-        inlineCompletionProvider,
-        hideCodeLensProvider,
-        status,
-    } = deps;
+    let { disposableWebSocket, status } = deps;
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
         async () => {
@@ -258,12 +211,12 @@ function registerCommands(
             const newRoomId = Math.random().toString(36).substring(2, 10);
             context.globalState.update(ROOM_ID_KEY, newRoomId); // Store the new roomId in globalState
 
-            ({
-                disposableWebSocket,
-                notesCodeLensProvider,
-                inlineCompletionProvider,
-                hideCodeLensProvider,
-            } = initializeSession(context, newRoomId, status, true));
+            disposableWebSocket = initializeSession(
+                context,
+                newRoomId,
+                status,
+                false
+            );
 
             // Path for coducateSetup.jsonc file in the /tmp directory
             const setupFilePath = path.join(
@@ -294,12 +247,11 @@ function registerCommands(
 
                 if (controlWebSocket.readyState === WebSocket.OPEN) {
                     try {
-                        const passwordSuccessfullySet =
-                            await sendPasswordSecurely(
-                                controlWebSocket,
-                                password,
-                                newRoomId
-                            );
+                        const passwordSuccessfullySet = await sendPassword(
+                            controlWebSocket,
+                            password,
+                            newRoomId
+                        );
                         if (passwordSuccessfullySet) {
                             vscode.window.showInformationMessage(
                                 "Room password set securely."
@@ -315,12 +267,11 @@ function registerCommands(
                 ) {
                     controlWebSocket.addEventListener("open", async () => {
                         try {
-                            const passwordSuccessfullySet =
-                                await sendPasswordSecurely(
-                                    controlWebSocket,
-                                    password,
-                                    newRoomId
-                                );
+                            const passwordSuccessfullySet = await sendPassword(
+                                controlWebSocket,
+                                password,
+                                newRoomId
+                            );
                             if (passwordSuccessfullySet) {
                                 vscode.window.showInformationMessage(
                                     "Room password set securely."
@@ -345,42 +296,13 @@ function registerCommands(
         }
     );
 
-    // Helper function to securely send the password
-    async function sendPasswordSecurely(
+    // Helper function to send the password
+    async function sendPassword(
         controlWebSocket: WebSocket,
         password: string,
         roomId: string
     ) {
         return new Promise(async (resolve, reject) => {
-            const saltArray = new Uint8Array(16); // 16 bytes = 128 bits
-            crypto.getRandomValues(saltArray); // Populate array with random values
-            const salt = Array.from(saltArray)
-                .map((byte) => byte.toString(16).padStart(2, "0"))
-                .join(""); // Convert to hex string
-
-            // Derive key using PBKDF2
-            const encoder = new TextEncoder();
-            const passwordKey = await crypto.subtle.importKey(
-                "raw",
-                encoder.encode(password),
-                { name: "PBKDF2" },
-                false,
-                ["deriveBits"]
-            );
-            const derivedBits = await crypto.subtle.deriveBits(
-                {
-                    name: "PBKDF2",
-                    salt: encoder.encode(salt),
-                    iterations: 1000,
-                    hash: "SHA-256",
-                },
-                passwordKey,
-                256 // Output length in bits
-            );
-            const hash = Array.from(new Uint8Array(derivedBits))
-                .map((byte) => byte.toString(16).padStart(2, "0"))
-                .join(""); // Convert derived bits to hex string
-
             const handleAccessResponse = (message: string) => {
                 try {
                     const { type, payload } = JSON.parse(message);
@@ -411,8 +333,7 @@ function registerCommands(
                     type: "setRoomPassword",
                     payload: {
                         roomId,
-                        password: hash,
-                        salt,
+                        password,
                     },
                 })
             );
@@ -429,6 +350,7 @@ function registerCommands(
         () => {
             if (disposableWebSocket) {
                 disposableWebSocket.dispose();
+                disposableWebSocket = undefined;
                 status.text = "$(sync-ignored) Coducate";
                 context.globalState.update(ROOM_ID_KEY, undefined);
                 vscode.window.showInformationMessage(
@@ -1172,7 +1094,9 @@ function registerCommands(
                     );
                     const selectedCode = editor.document.getText(fullLineRange);
 
-                    // Add the note using the NotesCodeLensProvider's method
+                    const notesCodeLensProvider =
+                        disposableWebSocket?.getNotesCodeLensProvider();
+
                     notesCodeLensProvider?.addNote(filePath, {
                         line: startLine,
                         code: selectedCode,
@@ -1206,6 +1130,9 @@ function registerCommands(
                 vscode.window.showErrorMessage("No active editor found.");
                 return;
             }
+
+            const notesCodeLensProvider =
+                disposableWebSocket?.getNotesCodeLensProvider();
 
             const notes = notesCodeLensProvider?.storedNotes[filePath];
             if (!notes) {
@@ -1281,6 +1208,9 @@ function registerCommands(
                 return; // User canceled
             }
 
+            const notesCodeLensProvider =
+                disposableWebSocket?.getNotesCodeLensProvider();
+
             if (choice.value === "file") {
                 notesCodeLensProvider?.removeAllNotesInFile(filePath);
             } else if (choice.value === "workspace") {
@@ -1293,6 +1223,9 @@ function registerCommands(
     const toggleSuggestionsCommand = vscode.commands.registerCommand(
         "coducate.toggleSuggestions",
         () => {
+            const inlineCompletionProvider =
+                disposableWebSocket?.getInlineCompletionProvider();
+
             const suggestionsEnabled =
                 inlineCompletionProvider?.toggleSuggestions();
             vscode.window.showInformationMessage(
@@ -1300,62 +1233,6 @@ function registerCommands(
                     suggestionsEnabled ? "enabled" : "disabled"
                 }.`
             );
-        }
-    );
-
-    // Command to hide selected code
-    const hideCodeCommand = vscode.commands.registerCommand(
-        "coducate.hideCode",
-        () => {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                const selection = editor.selection;
-                if (!selection.isEmpty) {
-                    // Create a range that includes entire lines, not just the selection
-                    const startLine = selection.start.line;
-                    const endLine = selection.end.line;
-
-                    // Create a range that starts at the beginning of the first line and ends at the end of the last line
-                    const range = new vscode.Range(
-                        new vscode.Position(startLine, 0),
-                        new vscode.Position(
-                            endLine,
-                            editor.document.lineAt(endLine).range.end.character
-                        )
-                    );
-
-                    const selectedCode = editor.document.getText(range);
-
-                    hideCodeLensProvider?.hideCode(range, selectedCode, editor);
-
-                    editor.edit((editBuilder) => {
-                        editBuilder.delete(range); // Remove the entire lines from the editor
-                    });
-                    console.log("Code hidden");
-                } else {
-                    vscode.window.showInformationMessage("No code selected");
-                }
-            }
-        }
-    );
-
-    // Command to show hidden code
-    const showCodeCommand = vscode.commands.registerCommand(
-        "coducate.showCode",
-        (range: vscode.Range) => {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                const hiddenCode = hideCodeLensProvider?.showCode(range);
-                if (hiddenCode) {
-                    editor.edit((editBuilder) => {
-                        editBuilder.insert(range.start, hiddenCode); // Insert the hidden code back
-                    });
-                    hideCodeLensProvider?.clearDecorations(editor); // Clear any remaining decorations
-                    console.log("Code revealed");
-                } else {
-                    vscode.window.showInformationMessage("No code to reveal");
-                }
-            }
         }
     );
 
@@ -1368,55 +1245,14 @@ function registerCommands(
         emulateTerminalCommand,
         requestTerminalOpenCommand,
         requestTerminalCloseCommand,
+        requestExplorerOpen,
+        requestExplorerClose,
         adjustFontSizeCommand,
         createNotesCommand,
         handleNoteActionCommand,
         removeNoteCommand,
-        toggleSuggestionsCommand,
-        hideCodeCommand,
-        showCodeCommand
+        toggleSuggestionsCommand
     );
-}
-
-/**
- * Register all providers for the extension.
- */
-function registerProviders(
-    context: vscode.ExtensionContext,
-    notesCodeLensProvider?: NotesCodeLensProvider,
-    inlineCompletionProvider?: InlineCompletionProvider,
-    hideCodeLensProvider?: HideCodeLensProvider
-) {
-    if (hideCodeLensProvider) {
-        context.subscriptions.push(
-            vscode.languages.registerCodeLensProvider(
-                "*",
-                hideCodeLensProvider
-            ),
-            vscode.languages.registerHoverProvider(
-                "*",
-                new HideCodeHoverProvider(hideCodeLensProvider)
-            )
-        );
-    }
-
-    if (notesCodeLensProvider) {
-        context.subscriptions.push(
-            vscode.languages.registerCodeLensProvider(
-                { pattern: "**" },
-                notesCodeLensProvider!
-            )
-        );
-    }
-
-    if (inlineCompletionProvider) {
-        context.subscriptions.push(
-            vscode.languages.registerInlineCompletionItemProvider(
-                { pattern: "**" },
-                inlineCompletionProvider
-            )
-        );
-    }
 }
 
 export function deactivate() {

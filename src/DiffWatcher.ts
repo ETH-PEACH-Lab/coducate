@@ -9,6 +9,8 @@ export class DiffWatcher {
     private context: vscode.ExtensionContext;
     private roomId: string;
 
+    private disposables: vscode.Disposable[] = [];
+
     constructor(
         fileYMap: Y.Map<Y.Text>,
         context: vscode.ExtensionContext,
@@ -32,18 +34,26 @@ export class DiffWatcher {
         this.loadDiffFiles();
 
         // Register the commands
-        vscode.commands.registerCommand(
+        const showDiffFilesCommand = vscode.commands.registerCommand(
             "coducate.showDiffFiles",
             this.showDiffFiles.bind(this)
         );
-        vscode.commands.registerCommand(
+        const acceptDiffCommand = vscode.commands.registerCommand(
             "coducate.acceptDiff",
             this.acceptDiff.bind(this)
         );
-        vscode.commands.registerCommand(
+        const rejectDiffCommand = vscode.commands.registerCommand(
             "coducate.rejectDiff",
             this.rejectDiff.bind(this)
         );
+
+        // Track disposables for cleanup in the dispose method
+        this.disposables.push(this.diffButton);
+        this.disposables.push(showDiffFilesCommand);
+        this.disposables.push(acceptDiffCommand);
+        this.disposables.push(rejectDiffCommand);
+
+        context.subscriptions.push(...this.disposables);
 
         // Observe changes in Y.Text objects
         this.observeYMapChanges();
@@ -298,5 +308,12 @@ export class DiffWatcher {
             }
         }
         return null;
+    }
+
+    dispose() {
+        for (const disposable of this.disposables) {
+            disposable.dispose();
+        }
+        this.disposables = [];
     }
 }
