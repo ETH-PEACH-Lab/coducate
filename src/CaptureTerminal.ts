@@ -3,7 +3,7 @@ import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { DisposableWebSocket } from "./DisposableWebSocket";
+import { SessionManager } from "./SessionManager";
 
 const defaultLine = "$ ";
 export class CaptureTerminal implements vscode.Pseudoterminal {
@@ -19,10 +19,10 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private shellProcess: ChildProcessWithoutNullStreams | null = null;
     private cwd: string = os.homedir();
 
-    constructor(private disposableWebSocket: DisposableWebSocket) {
+    constructor(private sessionManager: SessionManager) {
         this.outputFilePath = path.join(
             os.tmpdir(),
-            `coducateOutput_${disposableWebSocket.getRoomId()}.txt`
+            `coducateOutput_${sessionManager.getRoomId()}.txt`
         );
         this.clearFile();
         this.setCwd();
@@ -171,7 +171,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
 
         // Sync the file and YMap before closing
         fs.writeFileSync(this.outputFilePath, this.commandOutputBuffer);
-        this.disposableWebSocket.addOutputToYMap(
+        this.sessionManager.addOutputToYMap(
             this.outputFilePath,
             this.commandOutputBuffer
         );
@@ -281,14 +281,11 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private syncFile() {
         const fullContent = this.commandOutputBuffer + this.inputBuffer;
         fs.writeFileSync(this.outputFilePath, fullContent);
-        this.disposableWebSocket.addOutputToYMap(
-            this.outputFilePath,
-            fullContent
-        );
+        this.sessionManager.addOutputToYMap(this.outputFilePath, fullContent);
     }
 
     private clearFile() {
         fs.writeFileSync(this.outputFilePath, "");
-        this.disposableWebSocket.addOutputToYMap(this.outputFilePath, "");
+        this.sessionManager.addOutputToYMap(this.outputFilePath, "");
     }
 }

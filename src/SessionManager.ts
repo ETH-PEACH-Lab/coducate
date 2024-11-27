@@ -23,7 +23,7 @@ const EXCLUDED_DIRECTORIES = new Set([
     ".cache",
 ]);
 
-export class DisposableWebSocket {
+export class SessionManager {
     private provider: WebsocketProvider;
     private controlWebSocket: WebSocket;
     private roomId: string;

@@ -3,14 +3,14 @@ import path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import { WebSocket } from "ws";
-import { DisposableWebSocket } from "./DisposableWebSocket";
+import { SessionManager } from "./SessionManager";
 import { CaptureTerminal } from "./CaptureTerminal";
 
 const ROOM_ID_KEY = "coducateRoomId";
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("Coducate extension is now active.");
-    let disposableWebSocket: DisposableWebSocket | undefined;
+    let sessionManager: SessionManager | undefined;
 
     // Create the status bar item
     let status = vscode.window.createStatusBarItem(
@@ -25,12 +25,12 @@ export function activate(context: vscode.ExtensionContext) {
     // Restore session if a roomId exists
     const roomId = context.globalState.get<string>(ROOM_ID_KEY);
     if (roomId) {
-        disposableWebSocket = initializeSession(context, roomId, status, true);
+        sessionManager = initializeSession(context, roomId, status, true);
     }
 
     // Register commands
     registerCommands(context, {
-        disposableWebSocket,
+        sessionManager,
         status,
     });
 }
@@ -43,15 +43,15 @@ function initializeSession(
     roomId: string,
     status: vscode.StatusBarItem,
     wasConnected: boolean
-): DisposableWebSocket {
-    const disposableWebSocket = new DisposableWebSocket(
+): SessionManager {
+    const sessionManager = new SessionManager(
         "ws://localhost:1234/yjs",
         "ws://localhost:1234/control",
         roomId,
         context
     );
 
-    context.subscriptions.push(disposableWebSocket);
+    context.subscriptions.push(sessionManager);
 
     status.text = "$(sync) Coducate";
     status.tooltip = roomId;
@@ -75,7 +75,7 @@ function initializeSession(
     const activeEditor = vscode.window.activeTextEditor;
     const activeFilePath = activeEditor?.document.fileName;
     const relativeFilePath = activeFilePath
-        ? disposableWebSocket.getRelativeFilePath(activeFilePath)
+        ? sessionManager.getRelativeFilePath(activeFilePath)
         : null;
 
     // Get cursor and selection positions
@@ -99,12 +99,12 @@ function initializeSession(
         },
     };
 
-    disposableWebSocket
+    sessionManager
         .getAwareness()
         .setLocalStateField("vsCodeClient", clientState);
 
     // Send the currently active file to the server if available
-    const controlWebSocket = disposableWebSocket.getControlWebSocket();
+    const controlWebSocket = sessionManager.getControlWebSocket();
     if (controlWebSocket.readyState === WebSocket.OPEN) {
         if (relativeFilePath) {
             try {
@@ -152,7 +152,7 @@ function initializeSession(
             "WebSocket connection is not available."
         );
     }
-    return disposableWebSocket;
+    return sessionManager;
 }
 
 /**
@@ -161,16 +161,16 @@ function initializeSession(
 function registerCommands(
     context: vscode.ExtensionContext,
     deps: {
-        disposableWebSocket?: DisposableWebSocket;
+        sessionManager?: SessionManager;
         status: vscode.StatusBarItem;
     }
 ) {
-    let { disposableWebSocket, status } = deps;
+    let { sessionManager, status } = deps;
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
         async () => {
             // Check if a WebSocket session is already running
-            if (disposableWebSocket) {
+            if (sessionManager) {
                 vscode.window.showInformationMessage(
                     "A live coding session is already running."
                 );
@@ -211,7 +211,7 @@ function registerCommands(
             const newRoomId = Math.random().toString(36).substring(2, 10);
             context.globalState.update(ROOM_ID_KEY, newRoomId); // Store the new roomId in globalState
 
-            disposableWebSocket = initializeSession(
+            sessionManager = initializeSession(
                 context,
                 newRoomId,
                 status,
@@ -236,14 +236,13 @@ function registerCommands(
             // Write the content to coducateSetup.jsonc
             fs.writeFileSync(setupFilePath, setupContent);
 
-            await disposableWebSocket.addTemporaryFileToYMap(
+            await sessionManager.addTemporaryFileToYMap(
                 `coducateSetup_${newRoomId}.jsonc`
             );
 
             // Securely hash the password before sending
-            if (password && disposableWebSocket.getControlWebSocket()) {
-                const controlWebSocket =
-                    disposableWebSocket.getControlWebSocket();
+            if (password && sessionManager.getControlWebSocket()) {
+                const controlWebSocket = sessionManager.getControlWebSocket();
 
                 if (controlWebSocket.readyState === WebSocket.OPEN) {
                     try {
@@ -308,7 +307,7 @@ function registerCommands(
                     const { type, payload } = JSON.parse(message);
                     if (
                         type === "roomPasswordSetResponse" &&
-                        payload.roomId === disposableWebSocket?.getRoomId()
+                        payload.roomId === sessionManager?.getRoomId()
                     ) {
                         // Access granted/denied from server response
                         resolve(true);
@@ -348,9 +347,9 @@ function registerCommands(
     const endCommand = vscode.commands.registerCommand(
         "coducate.endSession",
         () => {
-            if (disposableWebSocket) {
-                disposableWebSocket.dispose();
-                disposableWebSocket = undefined;
+            if (sessionManager) {
+                sessionManager.dispose();
+                sessionManager = undefined;
                 status.text = "$(sync-ignored) Coducate";
                 context.globalState.update(ROOM_ID_KEY, undefined);
                 vscode.window.showInformationMessage(
@@ -384,13 +383,13 @@ function registerCommands(
 
             if (
                 targetSimpleID &&
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
+                sessionManager &&
+                sessionManager.getControlWebSocket()
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
@@ -401,7 +400,7 @@ function registerCommands(
                                         type === "accessGranted" &&
                                         payload.simpleID === targetSimpleID &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         // Access granted/denied from server response
                                         resolve(true);
@@ -424,7 +423,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "grantAccess",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                         targetSimpleID,
                                     },
                                 })
@@ -475,13 +474,13 @@ function registerCommands(
 
             if (
                 targetSimpleID &&
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
+                sessionManager &&
+                sessionManager.getControlWebSocket()
             ) {
                 const checkAccess = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
                             const handleAccessResponse = (message: string) => {
@@ -492,7 +491,7 @@ function registerCommands(
                                         type === "accessRevoked" &&
                                         payload.simpleID === targetSimpleID &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         // Access granted/denied from server response
                                         resolve(true);
@@ -515,7 +514,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "revokeAccess",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                         targetSimpleID,
                                     },
                                 })
@@ -566,7 +565,7 @@ function registerCommands(
 
             const document = editor.document;
 
-            if (!disposableWebSocket) {
+            if (!sessionManager) {
                 vscode.window.showErrorMessage("WebSocket is not initialized.");
                 return;
             }
@@ -578,7 +577,7 @@ function registerCommands(
                 "Emulated Terminal",
                 new vscode.CustomExecution(
                     async (): Promise<vscode.Pseudoterminal> =>
-                        new CaptureTerminal(disposableWebSocket!)
+                        new CaptureTerminal(sessionManager!)
                 ),
                 []
             );
@@ -594,14 +593,11 @@ function registerCommands(
     const requestTerminalOpenCommand = vscode.commands.registerCommand(
         "coducate.requestTerminalOpen",
         async () => {
-            if (
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
-            ) {
+            if (sessionManager && sessionManager.getControlWebSocket()) {
                 const checkConnectionAndOpenTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -611,7 +607,7 @@ function registerCommands(
                                     if (
                                         type === "terminalOpened" &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         resolve(true);
                                         console.log(
@@ -635,7 +631,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "requestTerminalOpen",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                     },
                                 })
                             );
@@ -681,14 +677,11 @@ function registerCommands(
     const requestTerminalCloseCommand = vscode.commands.registerCommand(
         "coducate.requestTerminalClose",
         async () => {
-            if (
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
-            ) {
+            if (sessionManager && sessionManager.getControlWebSocket()) {
                 const checkConnectionAndCloseTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -698,7 +691,7 @@ function registerCommands(
                                     if (
                                         type === "terminalClosed" &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         resolve(true);
                                         console.log(
@@ -722,7 +715,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "requestTerminalClose",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                     },
                                 })
                             );
@@ -770,14 +763,11 @@ function registerCommands(
     const requestExplorerOpen = vscode.commands.registerCommand(
         "coducate.requestExplorerOpen",
         async () => {
-            if (
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
-            ) {
+            if (sessionManager && sessionManager.getControlWebSocket()) {
                 const checkConnectionAndOpenTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -787,7 +777,7 @@ function registerCommands(
                                     if (
                                         type === "explorerOpened" &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         resolve(true);
                                         console.log(
@@ -811,7 +801,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "requestExplorerOpen",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                     },
                                 })
                             );
@@ -857,14 +847,11 @@ function registerCommands(
     const requestExplorerClose = vscode.commands.registerCommand(
         "coducate.requestExplorerClose",
         async () => {
-            if (
-                disposableWebSocket &&
-                disposableWebSocket.getControlWebSocket()
-            ) {
+            if (sessionManager && sessionManager.getControlWebSocket()) {
                 const checkConnectionAndCloseTerminal = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
-                            disposableWebSocket?.getControlWebSocket();
+                            sessionManager?.getControlWebSocket();
 
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             const handleResponse = (message: string) => {
@@ -874,7 +861,7 @@ function registerCommands(
                                     if (
                                         type === "explorerClosed" &&
                                         payload.roomId ===
-                                            disposableWebSocket?.getRoomId()
+                                            sessionManager?.getRoomId()
                                     ) {
                                         resolve(true);
                                         console.log(
@@ -898,7 +885,7 @@ function registerCommands(
                                 JSON.stringify({
                                     type: "requestExplorerClose",
                                     payload: {
-                                        roomId: disposableWebSocket?.getRoomId(),
+                                        roomId: sessionManager?.getRoomId(),
                                     },
                                 })
                             );
@@ -967,14 +954,11 @@ function registerCommands(
 
                 const choice = selection[0].label;
 
-                if (
-                    disposableWebSocket &&
-                    disposableWebSocket.getControlWebSocket()
-                ) {
+                if (sessionManager && sessionManager.getControlWebSocket()) {
                     const checkAccess = async () => {
                         return new Promise((resolve, reject) => {
                             const controlWebSocket =
-                                disposableWebSocket?.getControlWebSocket();
+                                sessionManager?.getControlWebSocket();
                             if (
                                 controlWebSocket?.readyState === WebSocket.OPEN
                             ) {
@@ -987,7 +971,7 @@ function registerCommands(
                                         if (
                                             type === "fontSizeChanged" &&
                                             payload.roomId ===
-                                                disposableWebSocket?.getRoomId()
+                                                sessionManager?.getRoomId()
                                         ) {
                                             resolve(true);
                                         }
@@ -1010,7 +994,7 @@ function registerCommands(
                                     JSON.stringify({
                                         type: "requestFontSizeChange",
                                         payload: {
-                                            roomId: disposableWebSocket?.getRoomId(),
+                                            roomId: sessionManager?.getRoomId(),
                                             increase:
                                                 choice === "Increase Font Size",
                                         },
@@ -1095,7 +1079,7 @@ function registerCommands(
                     const selectedCode = editor.document.getText(fullLineRange);
 
                     const notesCodeLensProvider =
-                        disposableWebSocket?.getNotesCodeLensProvider();
+                        sessionManager?.getNotesCodeLensProvider();
 
                     notesCodeLensProvider?.addNote(filePath, {
                         line: startLine,
@@ -1132,7 +1116,7 @@ function registerCommands(
             }
 
             const notesCodeLensProvider =
-                disposableWebSocket?.getNotesCodeLensProvider();
+                sessionManager?.getNotesCodeLensProvider();
 
             const notes = notesCodeLensProvider?.storedNotes[filePath];
             if (!notes) {
@@ -1209,7 +1193,7 @@ function registerCommands(
             }
 
             const notesCodeLensProvider =
-                disposableWebSocket?.getNotesCodeLensProvider();
+                sessionManager?.getNotesCodeLensProvider();
 
             if (choice.value === "file") {
                 notesCodeLensProvider?.removeAllNotesInFile(filePath);
@@ -1224,7 +1208,7 @@ function registerCommands(
         "coducate.toggleSuggestions",
         () => {
             const inlineCompletionProvider =
-                disposableWebSocket?.getInlineCompletionProvider();
+                sessionManager?.getInlineCompletionProvider();
 
             const suggestionsEnabled =
                 inlineCompletionProvider?.toggleSuggestions();
