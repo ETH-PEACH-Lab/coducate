@@ -46,7 +46,7 @@ function initializeSession(
 ): SessionManager {
     const sessionManager = new SessionManager(
         "ws://localhost:1234/yjs",
-        "ws://localhost:1234/control",
+        `ws://localhost:1234/control?roomId=${roomId}`,
         roomId,
         context
     );
