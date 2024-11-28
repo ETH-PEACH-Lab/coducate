@@ -38,8 +38,6 @@ export class InlineCompletionProvider
         const typedRange = new vscode.Range(noteStartPosition, position);
         const typedText = document.getText(typedRange);
 
-        console.log("Code (Note Content):\n", recentNote.code);
-
         const noteSuggestion = recentNote.code;
 
         // 1. If the user's input matches the stored notes, show the remaining notes
@@ -48,12 +46,6 @@ export class InlineCompletionProvider
                 noteSuggestion,
                 typedText
             );
-            console.log("*******************************************");
-            console.log("Showing suggestion from Notes");
-            console.log("Typed text:\n", typedText);
-            console.log("Suggestion:\n", noteSuggestion);
-            console.log("Trimmed suggestion:\n", trimmedSuggestion);
-            console.log("*******************************************");
             const item = new vscode.InlineCompletionItem(trimmedSuggestion);
             item.range = new vscode.Range(position, position);
             return [item];
@@ -65,17 +57,10 @@ export class InlineCompletionProvider
             cachedSuggestion &&
             this.startsWithIgnoringWhitespace(cachedSuggestion, typedText)
         ) {
-            console.log("*******************************************");
-            console.log("Using cached LLM suggestion");
-            console.log("Typed text:\n", typedText);
-
             const trimmedSuggestion = this.codeDifference(
                 cachedSuggestion,
                 typedText
             );
-            console.log("Suggestion (cached):\n", cachedSuggestion);
-            console.log("Trimmed suggestion:\n", trimmedSuggestion);
-            console.log("*******************************************");
             const item = new vscode.InlineCompletionItem(trimmedSuggestion);
             item.range = new vscode.Range(position, position);
             return [item];
@@ -87,13 +72,8 @@ export class InlineCompletionProvider
             typedText
         );
         if (newSuggestion) {
-            console.log("*******************************************");
-            console.log("Fetching new LLM Suggestion:\n", newSuggestion);
-            console.log("Typed text:\n", typedText);
-
             if (!this.startsWithIgnoringWhitespace(newSuggestion, typedText)) {
-                console.log("Drop invalid suggestion");
-                console.log("*******************************************");
+                // Drop invalid suggestions
                 return;
             }
 
@@ -101,9 +81,6 @@ export class InlineCompletionProvider
                 newSuggestion,
                 typedText
             );
-
-            console.log("Trimmed suggestion:\n", trimmedSuggestion);
-            console.log("*******************************************");
 
             this.cachedResponses[filePath] = newSuggestion;
             const item = new vscode.InlineCompletionItem(trimmedSuggestion);
