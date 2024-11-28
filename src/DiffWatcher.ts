@@ -165,7 +165,6 @@ export class DiffWatcher {
         // Check if CodeLens is already added for this document
         const docUriString = diffDoc.uri.toString();
         if (this.registeredCodeLensDocs.has(docUriString)) {
-            console.log(`CodeLens already added for document: ${docUriString}`);
             return;
         }
 
@@ -174,10 +173,6 @@ export class DiffWatcher {
                 if (document.uri.toString() !== diffDoc.uri.toString()) {
                     return [];
                 }
-
-                console.log(
-                    `Adding CodeLens to modified document: ${document.uri.toString()}`
-                );
 
                 // Provide CodeLens options
                 return [
