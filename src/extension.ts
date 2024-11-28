@@ -8,6 +8,12 @@ import { CaptureTerminal } from "./CaptureTerminal";
 
 const ROOM_ID_KEY = "coducateRoomId";
 
+enum SessionType {
+    NEW_SESSION = 1,
+    EXISTING_SESSION = 2,
+    RESTORED_SESSION = 3,
+}
+
 export function activate(context: vscode.ExtensionContext) {
     console.log("Coducate extension is now active.");
     let sessionManager: SessionManager | undefined;
@@ -25,7 +31,12 @@ export function activate(context: vscode.ExtensionContext) {
     // Restore session if a roomId exists
     const roomId = context.globalState.get<string>(ROOM_ID_KEY);
     if (roomId) {
-        sessionManager = initializeSession(context, roomId, status, true);
+        sessionManager = initializeSession(
+            context,
+            roomId,
+            status,
+            SessionType.RESTORED_SESSION
+        );
     }
 
     // Register commands
@@ -42,7 +53,7 @@ function initializeSession(
     context: vscode.ExtensionContext,
     roomId: string,
     status: vscode.StatusBarItem,
-    wasConnected: boolean
+    sessionType: SessionType
 ): SessionManager {
     const sessionManager = new SessionManager(
         "ws://localhost:1234/yjs",
@@ -61,13 +72,17 @@ function initializeSession(
         arguments: [roomId],
     };
 
-    if (wasConnected) {
+    if (sessionType === SessionType.RESTORED_SESSION) {
         vscode.window.showInformationMessage(
             "Live coding session restored. Room ID: " + roomId
         );
-    } else {
+    } else if (sessionType === SessionType.NEW_SESSION) {
         vscode.window.showInformationMessage(
             "Live coding session started. Room ID: " + roomId
+        );
+    } else if (sessionType === SessionType.EXISTING_SESSION) {
+        vscode.window.showInformationMessage(
+            "Live coding session joined. Room ID: " + roomId
         );
     }
 
@@ -178,54 +193,69 @@ function registerCommands(
                 return;
             }
 
-            // Prompt user for a password
-            const password = await vscode.window.showInputBox({
-                prompt: "Enter a password for this session",
-                placeHolder: "A password is required to secure the session",
-                password: true,
-            });
+            const sessionType = await vscode.window.showQuickPick(
+                ["New Session", "Existing Session"],
+                {
+                    placeHolder: "Choose session type",
+                }
+            );
 
-            if (!password) {
-                vscode.window.showErrorMessage("Password cannot be empty.");
+            if (!sessionType) {
+                vscode.window.showErrorMessage(
+                    "Session type selection is required."
+                );
                 return;
             }
 
-            // Prompt user for task description and learning goals
-            const taskDescription = await vscode.window.showInputBox({
-                prompt: "Enter the task description",
-                placeHolder:
-                    "e.g., Simulate a simple bank account system with deposits and withdrawals.",
-            });
-            const learningGoalsInput = await vscode.window.showInputBox({
-                prompt: "Enter learning goals (comma-separated)",
-                placeHolder:
-                    "e.g., Object-oriented Programming, State Management, Error Handling",
-            });
+            if (sessionType === "New Session") {
+                // Prompt user for a password
+                const password = await vscode.window.showInputBox({
+                    prompt: "Enter a password for this session",
+                    placeHolder: "A password is required to secure the session",
+                    password: true,
+                });
 
-            // Convert learning goals to an array
-            const learningGoals = learningGoalsInput
-                ? learningGoalsInput.split(",").map((goal) => goal.trim())
-                : [];
+                if (!password) {
+                    vscode.window.showErrorMessage("Password cannot be empty.");
+                    return;
+                }
 
-            // Generate a new roomId
-            const newRoomId = Math.random().toString(36).substring(2, 10);
-            context.globalState.update(ROOM_ID_KEY, newRoomId); // Store the new roomId in globalState
+                // Prompt user for task description and learning goals
+                const taskDescription = await vscode.window.showInputBox({
+                    prompt: "Enter the task description",
+                    placeHolder:
+                        "e.g., Simulate a simple bank account system with deposits and withdrawals.",
+                });
+                const learningGoalsInput = await vscode.window.showInputBox({
+                    prompt: "Enter learning goals (comma-separated)",
+                    placeHolder:
+                        "e.g., Object-oriented Programming, State Management, Error Handling",
+                });
 
-            sessionManager = initializeSession(
-                context,
-                newRoomId,
-                status,
-                false
-            );
+                // Convert learning goals to an array
+                const learningGoals = learningGoalsInput
+                    ? learningGoalsInput.split(",").map((goal) => goal.trim())
+                    : [];
 
-            // Path for coducateSetup.jsonc file in the /tmp directory
-            const setupFilePath = path.join(
-                os.tmpdir(),
-                `coducateSetup_${newRoomId}.jsonc`
-            );
+                // Generate a new roomId
+                const newRoomId = Math.random().toString(36).substring(2, 10);
+                context.globalState.update(ROOM_ID_KEY, newRoomId); // Store the new roomId in globalState
 
-            // Create JSON content with comments
-            const setupContent = `// This file contains the setup for task description and learning goals.
+                sessionManager = initializeSession(
+                    context,
+                    newRoomId,
+                    status,
+                    SessionType.NEW_SESSION
+                );
+
+                // Path for coducateSetup.jsonc file in the /tmp directory
+                const setupFilePath = path.join(
+                    os.tmpdir(),
+                    `coducateSetup_${newRoomId}.jsonc`
+                );
+
+                // Create JSON content with comments
+                const setupContent = `// This file contains the setup for task description and learning goals.
 // If edited, a browser refresh is required to see the changes.
 
 {
@@ -233,38 +263,18 @@ function registerCommands(
   "learningGoals": ${JSON.stringify(learningGoals)}
 }`;
 
-            // Write the content to coducateSetup.jsonc
-            fs.writeFileSync(setupFilePath, setupContent);
+                // Write the content to coducateSetup.jsonc
+                fs.writeFileSync(setupFilePath, setupContent);
 
-            await sessionManager.addTemporaryFileToYMap(
-                `coducateSetup_${newRoomId}.jsonc`
-            );
+                await sessionManager.addTemporaryFileToYMap(
+                    `coducateSetup_${newRoomId}.jsonc`
+                );
 
-            // Securely hash the password before sending
-            if (password && sessionManager.getControlWebSocket()) {
-                const controlWebSocket = sessionManager.getControlWebSocket();
+                if (password && sessionManager.getControlWebSocket()) {
+                    const controlWebSocket =
+                        sessionManager.getControlWebSocket();
 
-                if (controlWebSocket.readyState === WebSocket.OPEN) {
-                    try {
-                        const passwordSuccessfullySet = await sendPassword(
-                            controlWebSocket,
-                            password,
-                            newRoomId
-                        );
-                        if (passwordSuccessfullySet) {
-                            vscode.window.showInformationMessage(
-                                "Room password set securely."
-                            );
-                        }
-                    } catch (error) {
-                        vscode.window.showErrorMessage(
-                            "Failed to set room password securely."
-                        );
-                    }
-                } else if (
-                    controlWebSocket.readyState === WebSocket.CONNECTING
-                ) {
-                    controlWebSocket.addEventListener("open", async () => {
+                    if (controlWebSocket.readyState === WebSocket.OPEN) {
                         try {
                             const passwordSuccessfullySet = await sendPassword(
                                 controlWebSocket,
@@ -281,19 +291,106 @@ function registerCommands(
                                 "Failed to set room password securely."
                             );
                         }
-                    });
+                    } else if (
+                        controlWebSocket.readyState === WebSocket.CONNECTING
+                    ) {
+                        controlWebSocket.addEventListener("open", async () => {
+                            try {
+                                const passwordSuccessfullySet =
+                                    await sendPassword(
+                                        controlWebSocket,
+                                        password,
+                                        newRoomId
+                                    );
+                                if (passwordSuccessfullySet) {
+                                    vscode.window.showInformationMessage(
+                                        "Room password set securely."
+                                    );
+                                }
+                            } catch (error) {
+                                vscode.window.showErrorMessage(
+                                    "Failed to set room password securely."
+                                );
+                            }
+                        });
+                    } else {
+                        vscode.window.showErrorMessage(
+                            "WebSocket connection is not available. Please try again."
+                        );
+                    }
                 } else {
                     vscode.window.showErrorMessage(
-                        "WebSocket connection is not available. Please try again."
+                        "Failed to set room password securely. WebSocket is not initialized."
                     );
                 }
-            } else {
-                vscode.window.showErrorMessage(
-                    "Failed to set room password securely. WebSocket is not initialized."
+            } else if (sessionType === "Existing Session") {
+                const roomId = await vscode.window.showInputBox({
+                    prompt: "Enter the Room ID",
+                    placeHolder: "Room ID for the existing session",
+                });
+
+                if (!roomId) {
+                    vscode.window.showErrorMessage("Room ID cannot be empty.");
+                    return;
+                }
+
+                const sessionPassword = await vscode.window.showInputBox({
+                    prompt: "Enter the session password",
+                    placeHolder: "Session password required for joining",
+                    password: true,
+                });
+
+                if (!sessionPassword) {
+                    vscode.window.showErrorMessage(
+                        "Session password cannot be empty."
+                    );
+                    return;
+                }
+
+                const isPasswordValid = await verifyPassword(
+                    sessionPassword,
+                    roomId
+                );
+
+                if (!isPasswordValid) {
+                    vscode.window.showErrorMessage(
+                        "Invalid Room ID or Password."
+                    );
+                    return;
+                }
+
+                sessionManager = initializeSession(
+                    context,
+                    roomId,
+                    status,
+                    SessionType.EXISTING_SESSION
                 );
             }
         }
     );
+
+    // Helper function to verify the password
+    async function verifyPassword(password: string, roomId: string) {
+        try {
+            const response = await fetch(
+                "http://localhost:1234/verify-password",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ password, roomId }),
+                }
+            );
+
+            if (response.ok) {
+                const data = await response.json();
+                return data.success;
+            }
+        } catch (error) {
+            console.error("Error verifying password:", error);
+        }
+    }
 
     // Helper function to send the password
     async function sendPassword(
@@ -302,14 +399,13 @@ function registerCommands(
         roomId: string
     ) {
         return new Promise(async (resolve, reject) => {
-            const handleAccessResponse = (message: string) => {
+            const handleServerResponse = (message: string) => {
                 try {
                     const { type, payload } = JSON.parse(message);
                     if (
                         type === "roomPasswordSetResponse" &&
                         payload.roomId === sessionManager?.getRoomId()
                     ) {
-                        // Access granted/denied from server response
                         resolve(true);
                         console.log("Room password successfully set");
                     }
@@ -320,7 +416,7 @@ function registerCommands(
 
             controlWebSocket.onmessage = (event) => {
                 try {
-                    handleAccessResponse(event.data.toString());
+                    handleServerResponse(event.data.toString());
                 } catch {
                     // Ignore invalid JSON messages
                 }
@@ -392,7 +488,7 @@ function registerCommands(
                             sessionManager?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
-                            const handleAccessResponse = (message: string) => {
+                            const handleServerResponse = (message: string) => {
                                 try {
                                     const { type, payload } =
                                         JSON.parse(message);
@@ -413,7 +509,7 @@ function registerCommands(
 
                             controlWebSocket.onmessage = (event) => {
                                 try {
-                                    handleAccessResponse(event.data.toString());
+                                    handleServerResponse(event.data.toString());
                                 } catch {
                                     // Ignore invalid JSON messages
                                 }
@@ -483,7 +579,7 @@ function registerCommands(
                             sessionManager?.getControlWebSocket();
                         if (controlWebSocket?.readyState === WebSocket.OPEN) {
                             // Define a unique message event handler to listen for the response
-                            const handleAccessResponse = (message: string) => {
+                            const handleServerResponse = (message: string) => {
                                 try {
                                     const { type, payload } =
                                         JSON.parse(message);
@@ -504,7 +600,7 @@ function registerCommands(
 
                             controlWebSocket.onmessage = (event) => {
                                 try {
-                                    handleAccessResponse(event.data.toString());
+                                    handleServerResponse(event.data.toString());
                                 } catch {
                                     // Ignore invalid JSON messages
                                 }
@@ -962,7 +1058,7 @@ function registerCommands(
                             if (
                                 controlWebSocket?.readyState === WebSocket.OPEN
                             ) {
-                                const handleAccessResponse = (
+                                const handleServerResponse = (
                                     message: string
                                 ) => {
                                     try {
@@ -982,7 +1078,7 @@ function registerCommands(
 
                                 controlWebSocket.onmessage = (event) => {
                                     try {
-                                        handleAccessResponse(
+                                        handleServerResponse(
                                             event.data.toString()
                                         );
                                     } catch {
@@ -1048,6 +1144,10 @@ function registerCommands(
     const createNotesCommand = vscode.commands.registerCommand(
         "coducate.createNote",
         async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No running session found.");
+                return;
+            }
             const editor = vscode.window.activeTextEditor;
             if (editor) {
                 const selection = editor.selection;
