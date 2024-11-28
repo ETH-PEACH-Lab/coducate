@@ -6,6 +6,7 @@ export class DiffWatcher {
     private diffButton: vscode.StatusBarItem;
     private diffFilesSet: Set<string> = new Set();
     private openDiffEditors: Map<string, vscode.TextDocument> = new Map(); // Tracks open diff editors
+    private registeredCodeLensDocs: Set<string> = new Set(); // Tracks documents with registered CodeLens providers
     private context: vscode.ExtensionContext;
     private roomId: string;
 
@@ -136,28 +137,83 @@ export class DiffWatcher {
                 yTextDocument,
                 originalDocument.languageId
             );
+        } else {
+            // Refresh the content of the existing diff editor
+            await this.refreshOpenDiffEditor(relativePath);
         }
 
+        const diffEditorTitle = `VS Code ↔ Client Diff: ${relativePath}`;
         await vscode.commands.executeCommand(
             "vscode.diff",
             fileUri,
             yTextDocument.uri,
-            `VS Code ↔ Client Diff: ${relativePath}`
+            diffEditorTitle
         );
 
-        vscode.window
-            .showInformationMessage(
-                "Do you want to accept or reject the changes?",
-                "Accept",
-                "Reject"
-            )
-            .then((choice) => {
-                if (choice === "Accept") {
-                    this.acceptDiff(relativePath);
-                } else if (choice === "Reject") {
-                    this.rejectDiff(relativePath);
+        this.addCodeLensToDiffEditor(relativePath);
+    }
+
+    private addCodeLensToDiffEditor(relativePath: string) {
+        const diffDoc = this.openDiffEditors.get(relativePath);
+        if (!diffDoc) {
+            console.error(
+                `No open modified document found for ${relativePath}`
+            );
+            return;
+        }
+
+        // Check if CodeLens is already added for this document
+        const docUriString = diffDoc.uri.toString();
+        if (this.registeredCodeLensDocs.has(docUriString)) {
+            console.log(`CodeLens already added for document: ${docUriString}`);
+            return;
+        }
+
+        const provider: vscode.CodeLensProvider = {
+            provideCodeLenses: async (document: vscode.TextDocument) => {
+                if (document.uri.toString() !== diffDoc.uri.toString()) {
+                    return [];
                 }
-            });
+
+                console.log(
+                    `Adding CodeLens to modified document: ${document.uri.toString()}`
+                );
+
+                // Provide CodeLens options
+                return [
+                    new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
+                        title: "✔ Accept Changes",
+                        command: "coducate.acceptDiff",
+                        arguments: [relativePath],
+                    }),
+                    new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
+                        title: "✘ Reject Changes",
+                        command: "coducate.rejectDiff",
+                        arguments: [relativePath],
+                    }),
+                ];
+            },
+        };
+
+        // Use an explicit glob pattern to match files correctly
+        const providerDisposable = vscode.languages.registerCodeLensProvider(
+            { pattern: "**", scheme: diffDoc.uri.scheme },
+            provider
+        );
+
+        // Mark the document as registered
+        this.registeredCodeLensDocs.add(docUriString);
+
+        this.disposables.push(providerDisposable);
+        this.context.subscriptions.push(providerDisposable);
+    }
+
+    private async removeDocumentFromTracking(relativePath: string) {
+        const diffDoc = this.openDiffEditors.get(relativePath);
+        if (diffDoc) {
+            this.registeredCodeLensDocs.delete(diffDoc.uri.toString());
+            this.openDiffEditors.delete(relativePath);
+        }
     }
 
     private async refreshOpenDiffEditor(relativePath: string) {
@@ -208,6 +264,7 @@ export class DiffWatcher {
         this.openDiffEditors.delete(relativePath);
         this.updateDiffButtonVisibility();
         this.saveDiffFiles();
+        await this.removeDocumentFromTracking(relativePath);
 
         // Close the diff editor without saving
         await vscode.commands.executeCommand(
@@ -238,6 +295,7 @@ export class DiffWatcher {
         this.openDiffEditors.delete(relativePath);
         this.updateDiffButtonVisibility();
         this.saveDiffFiles();
+        await this.removeDocumentFromTracking(relativePath);
 
         // Close the diff editor without saving
         await vscode.commands.executeCommand(
