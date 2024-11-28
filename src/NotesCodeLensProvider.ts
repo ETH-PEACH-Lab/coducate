@@ -10,6 +10,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     public storedNotes: { [filePath: string]: INote[] } = {};
     private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
     public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
+    private isUndoing = false;
 
     private context: vscode.ExtensionContext;
     private roomId: string;
@@ -23,6 +24,11 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
         this.context = context;
         this.roomId = roomId;
         this.getRelativeFilePath = getRelativeFilePath;
+
+        // Listen for text document changes
+        vscode.workspace.onDidChangeTextDocument(
+            this.onDocumentChanged.bind(this)
+        );
 
         // Load notes on initialization
         this.loadNotes();
@@ -101,7 +107,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             this.saveNotes();
             this.refresh();
             vscode.window.showInformationMessage(
-                `All notes removed from the workspace (${noteCount} file(s)).`
+                `All notes removed from the workspace (${noteCount} file/s).`
             );
         } else {
             vscode.window.showInformationMessage(
@@ -121,5 +127,76 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             [filePath: string]: INote[];
         }>(key, {});
         this.storedNotes = savedNotes || {};
+    }
+
+    private async onDocumentChanged(event: vscode.TextDocumentChangeEvent) {
+        if (this.isUndoing) {
+            return;
+        }
+
+        const filePath = event.document.uri.fsPath;
+        const notes = this.storedNotes[filePath];
+        if (!notes) {
+            return;
+        }
+
+        // Sort notes by line number to ensure correct processing
+        notes.sort((a, b) => a.line - b.line);
+
+        for (const change of event.contentChanges) {
+            const startLine = change.range.start.line;
+            const endLine = change.range.end.line;
+            const linesRemoved = endLine - startLine;
+            const linesAdded = change.text.split("\n").length - 1;
+            const lineDelta = linesAdded - linesRemoved;
+
+            // Simulate note positions based on specified shift logic
+            const simulatedNotes = notes.map((note) => {
+                const newNote = { ...note };
+                if (newNote.line > startLine) {
+                    if (lineDelta > 0) {
+                        newNote.line += lineDelta;
+                    } else if (
+                        newNote.line !== startLine + 1 &&
+                        lineDelta < 0
+                    ) {
+                        newNote.line += lineDelta;
+                    }
+                }
+                return newNote;
+            });
+
+            // Check for overlaps
+            for (let i = 1; i < simulatedNotes.length; i++) {
+                if (simulatedNotes[i - 1].line === simulatedNotes[i].line) {
+                    // Conflict detected, trigger UNDO and warn the user
+                    this.isUndoing = true;
+                    await vscode.commands.executeCommand("undo");
+                    this.isUndoing = false;
+
+                    vscode.window.showWarningMessage(
+                        "Conflict detected: Two notes cannot be on the same line. The last change has been undone.",
+                        { modal: false },
+                        "Ok"
+                    );
+
+                    return;
+                }
+            }
+
+            // Apply the actual line shifts
+            for (const note of notes) {
+                if (note.line > startLine) {
+                    if (lineDelta > 0) {
+                        note.line += lineDelta;
+                    } else if (note.line !== startLine + 1 && lineDelta < 0) {
+                        note.line += lineDelta;
+                    }
+                }
+            }
+        }
+
+        this.saveNotes();
+        this.refresh();
     }
 }
