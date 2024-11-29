@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
 
-interface INote {
+interface Note {
     line: number;
     code: string;
     title: string;
 }
 
 export class NotesCodeLensProvider implements vscode.CodeLensProvider {
-    public storedNotes: { [filePath: string]: INote[] } = {};
+    public storedNotes: { [filePath: string]: Note[] } = {};
     private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
     public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
     private isUndoing = false;
@@ -58,7 +58,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
         return codeLenses;
     }
 
-    public addNote(filePath: string, note: INote) {
+    public addNote(filePath: string, note: Note) {
         if (!this.storedNotes[filePath]) {
             this.storedNotes[filePath] = [];
         }
@@ -124,7 +124,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     private loadNotes() {
         const key = `storedNotes-${this.roomId}`;
         const savedNotes = this.context.workspaceState.get<{
-            [filePath: string]: INote[];
+            [filePath: string]: Note[];
         }>(key, {});
         this.storedNotes = savedNotes || {};
     }
