@@ -71,6 +71,19 @@
                 "command": "coducate.toggleSuggestions",
                 "title": "Coducate: Toggle Suggestions"
             }
+        ],
+        "keybindings": [
+            {
+                "key": "ctrl+shift+u",
+                "mac": "ctrl+shift+u",
+                "command": "coducate.toggleSuggestions"
+            },
+            {
+                "key": "ctrl+shift+right",
+                "mac": "cmd+shift+right",
+                "command": "editor.action.inlineSuggest.acceptNextLine",
+                "when": "inlineSuggestionVisible && !editorReadonly"
+            }
         ]
     },
     "scripts": {
