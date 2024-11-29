@@ -28,6 +28,42 @@ export function activate(context: vscode.ExtensionContext) {
     status.show();
     context.subscriptions.push(status);
 
+    // Prompt to enable diffEditor.codeLens setting
+    const config = vscode.workspace.getConfiguration("diffEditor");
+    const currentValue = config.get<boolean>("codeLens");
+
+    if (!currentValue) {
+        vscode.window
+            .showInformationMessage(
+                "To accept/reject changes made by web clients, enable 'diffEditor.codeLens'.",
+                { modal: true },
+                "Enable"
+            )
+            .then((selection) => {
+                if (selection === "Enable") {
+                    config
+                        .update(
+                            "codeLens",
+                            true,
+                            vscode.ConfigurationTarget.Global
+                        )
+                        .then(
+                            () => {
+                                vscode.window.showInformationMessage(
+                                    "'diffEditor.codeLens' has been enabled."
+                                );
+                            },
+                            (error) => {
+                                vscode.window.showErrorMessage(
+                                    "Failed to enable 'diffEditor.codeLens'."
+                                );
+                                console.error(error);
+                            }
+                        );
+                }
+            });
+    }
+
     // Restore session if a roomId exists
     const roomId = context.globalState.get<string>(ROOM_ID_KEY);
     if (roomId) {
