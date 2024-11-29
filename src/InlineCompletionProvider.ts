@@ -7,7 +7,7 @@ export class InlineCompletionProvider
     implements vscode.InlineCompletionItemProvider
 {
     private cachedResponses: { [filePath: string]: string | null } = {};
-    private suggestionsEnabled = false;
+    private suggestionsEnabled = true;
 
     constructor(private notesCodeLensProvider: NotesCodeLensProvider) {}
 
