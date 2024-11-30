@@ -24,6 +24,10 @@
                 "title": "Coducate: End Session"
             },
             {
+                "command": "coducate.manageSessions",
+                "title": "Coducate: Manage Sessions"
+            },
+            {
                 "command": "coducate.copyRoomId",
                 "title": "Coducate: Copy Room ID"
             },
