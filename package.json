@@ -116,6 +116,7 @@
     },
     "dependencies": {
         "@vscode/prompt-tsx": "^0.3.0-alpha.13",
+        "unique-names-generator": "^4.7.1",
         "ws": "^8.18.0",
         "y-websocket": "^2.0.4",
         "yjs": "^13.6.20"
