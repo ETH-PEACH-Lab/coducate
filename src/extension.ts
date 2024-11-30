@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
-import path from "path";
-import * as fs from "fs";
-import * as os from "os";
+import {
+    uniqueNamesGenerator,
+    adjectives,
+    colors,
+    animals,
+} from "unique-names-generator";
 import { WebSocket } from "ws";
 import { SessionManager } from "./SessionManager";
 import { CaptureTerminal } from "./CaptureTerminal";
@@ -256,26 +259,134 @@ function registerCommands(
                     return;
                 }
 
-                // Prompt user for task description and learning goals
-                const taskDescription = await vscode.window.showInputBox({
-                    prompt: "Enter the task description",
-                    placeHolder:
-                        "e.g., Simulate a simple bank account system with deposits and withdrawals.",
-                });
-                const learningGoalsInput = await vscode.window.showInputBox({
-                    prompt: "Enter learning goals (comma-separated)",
-                    placeHolder:
-                        "e.g., Object-oriented Programming, State Management, Error Handling",
-                });
+                const action = await vscode.window.showQuickPick(
+                    ["Use Existing Files", "Create New Files"],
+                    {
+                        placeHolder:
+                            "Would you like to use existing or create new task_description.md and learning_goals.md?",
+                    }
+                );
 
-                // Convert learning goals to an array
-                const learningGoals = learningGoalsInput
-                    ? learningGoalsInput.split(",").map((goal) => goal.trim())
-                    : [];
+                if (!action) {
+                    vscode.window.showErrorMessage(
+                        "Action selection is required."
+                    );
+                    return;
+                }
 
-                // Generate a new roomId
-                const newRoomId = Math.random().toString(36).substring(2, 10);
-                context.globalState.update(ROOM_ID_KEY, newRoomId); // Store the new roomId in globalState
+                let taskDescriptionPath: vscode.Uri | undefined;
+                let learningGoalsPath: vscode.Uri | undefined;
+
+                if (action === "Create New Files") {
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+
+                    if (!workspaceFolders || workspaceFolders.length === 0) {
+                        vscode.window.showErrorMessage(
+                            "No workspace folder is open. Please open a folder and try again."
+                        );
+                        return;
+                    }
+
+                    let targetFolder: vscode.WorkspaceFolder;
+
+                    if (workspaceFolders.length === 1) {
+                        targetFolder = workspaceFolders[0];
+                    } else {
+                        const folderNames = workspaceFolders.map(
+                            (folder) => folder.name
+                        );
+                        const selectedFolderName =
+                            await vscode.window.showQuickPick(folderNames, {
+                                placeHolder: "Select a workspace folder",
+                            });
+
+                        if (!selectedFolderName) {
+                            vscode.window.showErrorMessage(
+                                "You must select a workspace folder."
+                            );
+                            return;
+                        }
+
+                        targetFolder = workspaceFolders.find(
+                            (folder) => folder.name === selectedFolderName
+                        )!;
+                    }
+
+                    const taskDescriptionFileUri = vscode.Uri.joinPath(
+                        targetFolder.uri,
+                        "task_description.md"
+                    );
+                    const learningGoalsFileUri = vscode.Uri.joinPath(
+                        targetFolder.uri,
+                        "learning_goals.md"
+                    );
+
+                    // Write default content to files
+                    await vscode.workspace.fs.writeFile(
+                        taskDescriptionFileUri,
+                        Buffer.from(
+                            "# Task Description\n\nEnter your task description here."
+                        )
+                    );
+                    await vscode.workspace.fs.writeFile(
+                        learningGoalsFileUri,
+                        Buffer.from(
+                            "# Learning Goals\n\n- Enter your learning goals here."
+                        )
+                    );
+
+                    taskDescriptionPath = taskDescriptionFileUri;
+                    learningGoalsPath = learningGoalsFileUri;
+
+                    vscode.window.showInformationMessage(
+                        `Created 'task_description.md' and 'learning_goals.md' in ${targetFolder.name}.`
+                    );
+                } else {
+                    // Use existing files
+                    const taskDescriptionPaths =
+                        await vscode.window.showOpenDialog({
+                            canSelectFiles: true,
+                            canSelectFolders: false,
+                            filters: {
+                                Markdown: ["md"],
+                            },
+                            title: "Select task_description.md",
+                            openLabel: "Select as task description",
+                        });
+
+                    const learningGoalsPaths =
+                        await vscode.window.showOpenDialog({
+                            canSelectFiles: true,
+                            canSelectFolders: false,
+                            filters: {
+                                Markdown: ["md"],
+                            },
+                            title: "Select learning_goals.md",
+                            openLabel: "Select as learning goals",
+                        });
+
+                    if (!taskDescriptionPaths || !learningGoalsPaths) {
+                        vscode.window.showErrorMessage(
+                            "Both task_description.md and learning_goals.md must be selected."
+                        );
+                        return;
+                    }
+
+                    taskDescriptionPath = taskDescriptionPaths[0];
+                    learningGoalsPath = learningGoalsPaths[0];
+                }
+
+                let newRoomId: string | undefined;
+                let isRoomIdValid = false;
+                while (!(isRoomIdValid && newRoomId)) {
+                    newRoomId = uniqueNamesGenerator({
+                        dictionaries: [adjectives, colors, animals],
+                    });
+
+                    isRoomIdValid = !(await isRoomExisting(newRoomId));
+                }
+
+                context.globalState.update(ROOM_ID_KEY, newRoomId);
 
                 sessionManager = initializeSession(
                     context,
@@ -284,27 +395,23 @@ function registerCommands(
                     SessionType.NEW_SESSION
                 );
 
-                // Path for coducateSetup.jsonc file in the /tmp directory
-                const setupFilePath = path.join(
-                    os.tmpdir(),
-                    `coducateSetup_${newRoomId}.jsonc`
-                );
-
-                // Create JSON content with comments
-                const setupContent = `// This file contains the setup for task description and learning goals.
-// If edited, a browser refresh is required to see the changes.
-
-{
-  "taskDescription": ${JSON.stringify(taskDescription)},
-  "learningGoals": ${JSON.stringify(learningGoals)}
-}`;
-
-                // Write the content to coducateSetup.jsonc
-                fs.writeFileSync(setupFilePath, setupContent);
-
-                await sessionManager.addTemporaryFileToYMap(
-                    `coducateSetup_${newRoomId}.jsonc`
-                );
+                if (action === "Existing Files") {
+                    try {
+                        await sessionManager.addFileToYMap(
+                            taskDescriptionPath.fsPath,
+                            taskDescriptionPath.fsPath
+                        );
+                        await sessionManager.addFileToYMap(
+                            learningGoalsPath.fsPath,
+                            learningGoalsPath.fsPath
+                        );
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            "Failed to add task description and learning goals."
+                        );
+                        return;
+                    }
+                }
 
                 if (password && sessionManager.getControlWebSocket()) {
                     const controlWebSocket =
@@ -312,11 +419,14 @@ function registerCommands(
 
                     if (controlWebSocket.readyState === WebSocket.OPEN) {
                         try {
-                            const passwordSuccessfullySet = await sendPassword(
-                                controlWebSocket,
-                                password,
-                                newRoomId
-                            );
+                            const passwordSuccessfullySet =
+                                await sendSessionData(
+                                    controlWebSocket,
+                                    password,
+                                    taskDescriptionPath.fsPath,
+                                    learningGoalsPath.fsPath,
+                                    newRoomId
+                                );
                             if (passwordSuccessfullySet) {
                                 vscode.window.showInformationMessage(
                                     "Room password set securely."
@@ -333,9 +443,11 @@ function registerCommands(
                         controlWebSocket.addEventListener("open", async () => {
                             try {
                                 const passwordSuccessfullySet =
-                                    await sendPassword(
+                                    await sendSessionData(
                                         controlWebSocket,
                                         password,
+                                        taskDescriptionPath.fsPath,
+                                        learningGoalsPath.fsPath,
                                         newRoomId
                                     );
                                 if (passwordSuccessfullySet) {
@@ -395,6 +507,8 @@ function registerCommands(
                     return;
                 }
 
+                context.globalState.update(ROOM_ID_KEY, roomId);
+
                 sessionManager = initializeSession(
                     context,
                     roomId,
@@ -428,10 +542,32 @@ function registerCommands(
         }
     }
 
-    // Helper function to send the password
-    async function sendPassword(
+    // Helper function to check if the room ID already exists
+    async function isRoomExisting(roomId: string) {
+        try {
+            const response = await fetch("http://localhost:1234/verify-room", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ roomId }),
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                return data.success;
+            }
+        } catch (error) {
+            console.error("Error checking room ID:", error);
+        }
+    }
+
+    // Helper function to send the session data to the server
+    async function sendSessionData(
         controlWebSocket: WebSocket,
         password: string,
+        taskDescriptionPath: string,
+        learningGoalsPath: string,
         roomId: string
     ) {
         return new Promise(async (resolve, reject) => {
@@ -439,7 +575,7 @@ function registerCommands(
                 try {
                     const { type, payload } = JSON.parse(message);
                     if (
-                        type === "roomPasswordSetResponse" &&
+                        type === "sessionDataSetResponse" &&
                         payload.roomId === sessionManager?.getRoomId()
                     ) {
                         resolve(true);
@@ -461,10 +597,12 @@ function registerCommands(
             // Send password to server
             controlWebSocket.send(
                 JSON.stringify({
-                    type: "setRoomPassword",
+                    type: "setSessionData",
                     payload: {
                         roomId,
                         password,
+                        taskDescriptionPath,
+                        learningGoalsPath,
                     },
                 })
             );
@@ -1192,7 +1330,7 @@ function registerCommands(
                 if (!selection.isEmpty) {
                     const title = await vscode.window.showInputBox({
                         prompt: "Enter a title for the note",
-                        placeHolder: "e.g., Check if input is valid",
+                        placeHolder: "e.g., Check if user input is valid",
                     });
 
                     if (!title) {
