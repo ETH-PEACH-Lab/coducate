@@ -437,25 +437,8 @@ export class SessionManager {
         this.fileYMap.set(relativeFilePath, yText);
     }
 
-    // Public method to expose addTmpFileToYMap functionality
-    public async addTemporaryFileToYMap(fileName: string) {
-        await this.addTmpFileToYMap(fileName);
-    }
-
-    // Function to add the /tmp file directly to fileYMap
-    private async addTmpFileToYMap(fileName: string) {
-        const tmpFilePath = path.join(os.tmpdir(), fileName);
-
-        // Check if file exists before trying to add it
-        if (fs.existsSync(tmpFilePath)) {
-            await this.addFileToYMap(tmpFilePath, tmpFilePath);
-        } else {
-            console.log("Temporary file does not exist in /tmp directory.");
-        }
-    }
-
     // Function to add a single file to fileYMap
-    private async addFileToYMap(filePath: string, relativeFilePath: string) {
+    public async addFileToYMap(filePath: string, relativeFilePath: string) {
         if (!this.fileYMap.has(relativeFilePath)) {
             const yText = new Y.Text();
             this.fileYMap.set(relativeFilePath, yText);
