@@ -247,6 +247,19 @@ function registerCommands(
             }
 
             if (sessionType === "New Session") {
+                // Prompt user for a session name
+                const sessionName = await vscode.window.showInputBox({
+                    prompt: "Enter an easy-to-remember session name",
+                    placeHolder: "E.g., 'Computer Systems Lecture 10'",
+                });
+
+                if (!sessionName) {
+                    vscode.window.showErrorMessage(
+                        "Session name cannot be empty."
+                    );
+                    return;
+                }
+
                 // Prompt user for a password
                 const password = await vscode.window.showInputBox({
                     prompt: "Enter a password for this session",
@@ -388,6 +401,17 @@ function registerCommands(
 
                 context.globalState.update(ROOM_ID_KEY, newRoomId);
 
+                // Store the mapping of session name to room ID and password
+                const existingSessions =
+                    context.globalState.get<{
+                        [key: string]: { roomId: string; password: string };
+                    }>("coducate.sessions") || {};
+                existingSessions[sessionName] = { roomId: newRoomId, password };
+                await context.globalState.update(
+                    "coducate.sessions",
+                    existingSessions
+                );
+
                 sessionManager = initializeSession(
                     context,
                     newRoomId,
@@ -427,11 +451,6 @@ function registerCommands(
                                     learningGoalsPath.fsPath,
                                     newRoomId
                                 );
-                            if (passwordSuccessfullySet) {
-                                vscode.window.showInformationMessage(
-                                    "Room password set securely."
-                                );
-                            }
                         } catch (error) {
                             vscode.window.showErrorMessage(
                                 "Failed to set room password securely."
@@ -450,11 +469,6 @@ function registerCommands(
                                         learningGoalsPath.fsPath,
                                         newRoomId
                                     );
-                                if (passwordSuccessfullySet) {
-                                    vscode.window.showInformationMessage(
-                                        "Room password set securely."
-                                    );
-                                }
                             } catch (error) {
                                 vscode.window.showErrorMessage(
                                     "Failed to set room password securely."
@@ -472,33 +486,44 @@ function registerCommands(
                     );
                 }
             } else if (sessionType === "Existing Session") {
-                const roomId = await vscode.window.showInputBox({
-                    prompt: "Enter the Room ID",
-                    placeHolder: "Room ID for the existing session",
-                });
+                // Retrieve the stored session mappings
+                const existingSessions =
+                    context.globalState.get<{
+                        [key: string]: { roomId: string; password: string };
+                    }>("coducate.sessions") || {};
 
-                if (!roomId) {
-                    vscode.window.showErrorMessage("Room ID cannot be empty.");
-                    return;
-                }
+                const sessionChoices = Object.entries(existingSessions).map(
+                    ([name, info]) => `${name} (${info.roomId})`
+                );
 
-                const sessionPassword = await vscode.window.showInputBox({
-                    prompt: "Enter the session password",
-                    placeHolder: "Session password required for joining",
-                    password: true,
-                });
-
-                if (!sessionPassword) {
-                    vscode.window.showErrorMessage(
-                        "Session password cannot be empty."
+                if (sessionChoices.length === 0) {
+                    vscode.window.showInformationMessage(
+                        "No existing sessions found. Please create a new session first."
                     );
                     return;
                 }
 
-                const isPasswordValid = await verifyPassword(
-                    sessionPassword,
-                    roomId
+                const selectedSession = await vscode.window.showQuickPick(
+                    sessionChoices,
+                    {
+                        placeHolder: "Select an existing session",
+                    }
                 );
+
+                if (!selectedSession) {
+                    vscode.window.showErrorMessage(
+                        "You must select an existing session."
+                    );
+                    return;
+                }
+
+                const [selectedSessionName, roomId] = selectedSession
+                    .match(/^(.+?) \((.+?)\)$/)!
+                    .slice(1);
+
+                const { password } = existingSessions[selectedSessionName];
+
+                const isPasswordValid = await verifyPassword(password, roomId);
 
                 if (!isPasswordValid) {
                     vscode.window.showErrorMessage(
@@ -629,6 +654,150 @@ function registerCommands(
                 vscode.window.showInformationMessage(
                     "No live coding session is running."
                 );
+            }
+        }
+    );
+
+    const manageSessionsCommand = vscode.commands.registerCommand(
+        "coducate.manageSessions",
+        async () => {
+            // Retrieve the stored session name-to-room ID-password mappings
+            let existingSessions =
+                context.globalState.get<{
+                    [key: string]: { roomId: string; password: string };
+                }>("coducate.sessions") || {};
+
+            if (Object.keys(existingSessions).length === 0) {
+                vscode.window.showInformationMessage(
+                    "No sessions available to manage."
+                );
+                return;
+            }
+
+            let continueManaging = true;
+
+            while (continueManaging) {
+                // Convert sessions to a displayable list
+                const sessionChoices = Object.entries(existingSessions).map(
+                    ([name, { roomId }]) => `${name} (${roomId})`
+                );
+
+                if (sessionChoices.length === 0) {
+                    vscode.window.showInformationMessage(
+                        "All sessions have been deleted."
+                    );
+                    return;
+                }
+
+                const selectedSession = await vscode.window.showQuickPick(
+                    [...sessionChoices, "Exit"],
+                    {
+                        placeHolder:
+                            "Select a session to manage, or choose 'Exit' to finish managing sessions",
+                    }
+                );
+
+                if (!selectedSession || selectedSession === "Exit") {
+                    vscode.window.showInformationMessage(
+                        "Session management finished."
+                    );
+                    continueManaging = false;
+                    return;
+                }
+
+                const [selectedSessionName] = selectedSession
+                    .match(/^(.+?) \(/)!
+                    .slice(1);
+
+                const sessionActions = await vscode.window.showQuickPick(
+                    [
+                        "Show password",
+                        "Rename Session",
+                        "Delete Session",
+                        "Cancel",
+                    ],
+                    {
+                        placeHolder: `What would you like to do with '${selectedSessionName}'?`,
+                    }
+                );
+
+                if (!sessionActions || sessionActions === "Cancel") {
+                    continue; // Go back to the session list
+                }
+
+                if (sessionActions === "Show password") {
+                    const sessionData = existingSessions[selectedSessionName];
+                    if (!sessionData) {
+                        vscode.window.showErrorMessage(
+                            "Session data not found."
+                        );
+                        continue;
+                    }
+                    const password = sessionData.password;
+
+                    const copyToClipboard =
+                        await vscode.window.showInformationMessage(
+                            `Password for '${selectedSessionName}': ${password}`,
+                            "Copy to Clipboard"
+                        );
+
+                    if (copyToClipboard === "Copy to Clipboard") {
+                        await vscode.env.clipboard.writeText(password);
+                        vscode.window.showInformationMessage(
+                            "Password copied to clipboard."
+                        );
+                    }
+                } else if (sessionActions === "Rename Session") {
+                    const newSessionName = await vscode.window.showInputBox({
+                        prompt: `Enter a new name for the session '${selectedSessionName}'`,
+                        placeHolder: "New session name",
+                        value: selectedSessionName,
+                    });
+
+                    if (!newSessionName) {
+                        vscode.window.showErrorMessage(
+                            "Session was not renamed."
+                        );
+                        continue;
+                    }
+
+                    // Rename the session
+                    const sessionData = existingSessions[selectedSessionName];
+                    delete existingSessions[selectedSessionName];
+                    existingSessions[newSessionName] = sessionData;
+
+                    await context.globalState.update(
+                        "coducate.sessions",
+                        existingSessions
+                    );
+                    vscode.window.showInformationMessage(
+                        `Session '${selectedSessionName}' renamed to '${newSessionName}'.`
+                    );
+                } else if (sessionActions === "Delete Session") {
+                    const confirmDelete = await vscode.window.showQuickPick(
+                        ["Yes", "No"],
+                        {
+                            placeHolder: `Are you sure you want to delete the session '${selectedSessionName}'?`,
+                        }
+                    );
+
+                    if (confirmDelete === "Yes") {
+                        // Delete the selected session
+                        delete existingSessions[selectedSessionName];
+                        await context.globalState.update(
+                            "coducate.sessions",
+                            existingSessions
+                        );
+
+                        vscode.window.showInformationMessage(
+                            `Session '${selectedSessionName}' deleted successfully.`
+                        );
+                    } else {
+                        vscode.window.showInformationMessage(
+                            `Cancelled deletion. No changes were made.`
+                        );
+                    }
+                }
             }
         }
     );
@@ -1414,7 +1583,7 @@ function registerCommands(
             );
 
             if (!choice) {
-                return; // User canceled
+                return; // User cancelled
             }
 
             if (choice.value === "insert") {
@@ -1463,7 +1632,7 @@ function registerCommands(
             );
 
             if (!choice) {
-                return; // User canceled
+                return; // User cancelled
             }
 
             const notesCodeLensProvider =
@@ -1497,6 +1666,7 @@ function registerCommands(
     context.subscriptions.push(
         startCommand,
         endCommand,
+        manageSessionsCommand,
         copyRoomIdCommand,
         grantWriteAccessCommand,
         revokeWriteAccessCommand,
