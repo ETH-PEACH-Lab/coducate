@@ -118,12 +118,12 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
 
     private saveNotes() {
         const key = `storedNotes-${this.roomId}`;
-        this.context.workspaceState.update(key, this.storedNotes);
+        this.context.globalState.update(key, this.storedNotes);
     }
 
     private loadNotes() {
         const key = `storedNotes-${this.roomId}`;
-        const savedNotes = this.context.workspaceState.get<{
+        const savedNotes = this.context.globalState.get<{
             [filePath: string]: Note[];
         }>(key, {});
         this.storedNotes = savedNotes || {};
