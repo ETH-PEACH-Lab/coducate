@@ -10,6 +10,25 @@ import { SessionManager } from "./SessionManager";
 import { CaptureTerminal } from "./CaptureTerminal";
 
 const ROOM_ID_KEY = "coducateRoomId";
+// Determine environment
+const PRODUCTION = true;
+// = process.env.NODE_ENV === "production";
+
+// Define backend host for HTTP API requests
+const BACKEND_HOST = PRODUCTION
+    ? "https://delta.peachhub-cntr1.inf.ethz.ch"
+    : "http://localhost:1234"; // Development environment
+
+// Define WebSocket protocol and host
+const WEBSOCKET_PROTOCOL = PRODUCTION ? "wss" : "ws";
+const WEBSOCKET_HOST = PRODUCTION
+    ? "delta.peachhub-cntr1.inf.ethz.ch"
+    : "localhost:1234";
+
+// Define WebSocket URLs
+const YJS_WEBSOCKET_URL = `${WEBSOCKET_PROTOCOL}://${WEBSOCKET_HOST}/yjs`;
+const CONTROL_WEBSOCKET_URL = (roomId: string) =>
+    `${WEBSOCKET_PROTOCOL}://${WEBSOCKET_HOST}/control?roomId=${roomId}`;
 
 enum SessionType {
     NEW_SESSION = 1,
@@ -94,8 +113,8 @@ function initializeSession(
     sessionType: SessionType
 ): SessionManager {
     const sessionManager = new SessionManager(
-        "ws://localhost:1234/yjs",
-        `ws://localhost:1234/control?roomId=${roomId}`,
+        YJS_WEBSOCKET_URL,
+        CONTROL_WEBSOCKET_URL(roomId),
         roomId,
         context
     );
@@ -393,7 +412,16 @@ function registerCommands(
                         dictionaries: [adjectives, colors, animals],
                     });
 
-                    isRoomIdValid = !(await isRoomExisting(newRoomId));
+                    try {
+                        isRoomIdValid = !(await isRoomExisting(newRoomId));
+                    } catch (error) {
+                        console.log("Error generating room ID: " + error);
+                        vscode.window.showErrorMessage(
+                            "Error generating room ID: " +
+                                (error as Error).message
+                        );
+                        return;
+                    }
                 }
 
                 context.globalState.update(ROOM_ID_KEY, newRoomId);
@@ -522,7 +550,15 @@ function registerCommands(
                 const roomId = selectedSession.description;
                 const password = existingSessions[selectedSessionName].password;
 
-                const isPasswordValid = await verifyPassword(password, roomId);
+                let isPasswordValid = false;
+                try {
+                    isPasswordValid = await verifyPassword(password, roomId);
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        "Error verifying password: " + (error as Error).message
+                    );
+                    return;
+                }
 
                 if (!isPasswordValid) {
                     vscode.window.showErrorMessage(
@@ -547,7 +583,7 @@ function registerCommands(
     async function verifyPassword(password: string, roomId: string) {
         try {
             const response = await fetch(
-                "http://localhost:1234/verify-password",
+                `${BACKEND_HOST}/api/verify-password`,
                 {
                     method: "POST",
                     headers: {
@@ -562,16 +598,18 @@ function registerCommands(
                 return data.success;
             }
         } catch (error) {
-            vscode.window.showErrorMessage(
+            console.error(
                 "Error verifying password: " + (error as Error).message
             );
+
+            throw error;
         }
     }
 
     // Helper function to check if the room ID already exists
     async function isRoomExisting(roomId: string) {
         try {
-            const response = await fetch("http://localhost:1234/verify-room", {
+            const response = await fetch(`${BACKEND_HOST}/api/verify-room`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -584,9 +622,11 @@ function registerCommands(
                 return data.success;
             }
         } catch (error) {
-            vscode.window.showErrorMessage(
+            console.error(
                 "Error verifying room ID: " + (error as Error).message
             );
+
+            throw error;
         }
     }
 
@@ -1605,7 +1645,7 @@ function registerCommands(
             }
 
             if (sessionManager && sessionManager.getControlWebSocket()) {
-                const checkConnectionAndOpenTerminal = async () => {
+                const checkConnectionAndOpenExplorer = async () => {
                     return new Promise((resolve, reject) => {
                         const controlWebSocket =
                             sessionManager?.getControlWebSocket();
@@ -1660,7 +1700,7 @@ function registerCommands(
 
                 try {
                     const terminalOpened =
-                        await checkConnectionAndOpenTerminal();
+                        await checkConnectionAndOpenExplorer();
                     if (terminalOpened) {
                         vscode.window.showInformationMessage(
                             "Explorer opened successfully."
