@@ -444,7 +444,7 @@ function registerCommands(
                     SessionType.NEW_SESSION
                 );
 
-                if (action === "Existing Files") {
+                if (action === "Use Existing Files") {
                     try {
                         await sessionManager.addFileToYMap(
                             taskDescriptionPath.fsPath,
