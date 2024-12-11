@@ -12,7 +12,6 @@ import { CaptureTerminal } from "./CaptureTerminal";
 const ROOM_ID_KEY = "coducateRoomId";
 // Determine environment
 const PRODUCTION = true;
-// = process.env.NODE_ENV === "production";
 
 // Define backend host for HTTP API requests
 const BACKEND_HOST = PRODUCTION
