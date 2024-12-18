@@ -16,3 +16,13 @@ All notable changes to the "Coducate" extension will be documented in this file.
 -   Added commands to adjust the web view UI of Coducate.
 
 ---
+
+## [0.0.2] - 2024-12-18
+
+### Fixed
+
+-   Resolved issue with Coducate logo being displayed incorrectly.
+-   Add support for Windows by fixing path issues and using cmd instead of bash.
+-   Change LICENSE from MIT to Coducate EULA.
+
+---
