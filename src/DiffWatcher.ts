@@ -156,9 +156,9 @@ export class DiffWatcher {
     private addCodeLensToDiffEditor(relativePath: string) {
         const diffDoc = this.openDiffEditors.get(relativePath);
         if (!diffDoc) {
-            console.error(
-                `No open modified document found for ${relativePath}`
-            );
+            // console.error(
+            //     `No open modified document found for ${relativePath}`
+            // );
             return;
         }
 
@@ -335,7 +335,7 @@ export class DiffWatcher {
         try {
             return await vscode.workspace.openTextDocument(fileUri);
         } catch (error) {
-            console.error("Error opening document:", error);
+            // console.error("Error opening document:", error);
             return null;
         }
     }

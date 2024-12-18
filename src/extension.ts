@@ -10,6 +10,7 @@ import { SessionManager } from "./SessionManager";
 import { CaptureTerminal } from "./CaptureTerminal";
 
 const ROOM_ID_KEY = "coducateRoomId";
+
 // Determine environment
 const PRODUCTION = true;
 
@@ -36,7 +37,7 @@ enum SessionType {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log("Coducate extension is now active.");
+    // console.log("Coducate extension is now active.");
     let sessionManager: SessionManager | undefined;
 
     // Create the status bar item
@@ -335,9 +336,18 @@ function registerCommands(
                             return;
                         }
 
-                        targetFolder = workspaceFolders.find(
+                        let selectedFolder = workspaceFolders.find(
                             (folder) => folder.name === selectedFolderName
-                        )!;
+                        );
+
+                        if (!selectedFolder) {
+                            vscode.window.showErrorMessage(
+                                "Selected folder not found."
+                            );
+                            return;
+                        }
+
+                        targetFolder = selectedFolder;
                     }
 
                     const taskDescriptionFileUri = vscode.Uri.joinPath(
@@ -414,7 +424,7 @@ function registerCommands(
                     try {
                         isRoomIdValid = !(await isRoomExisting(newRoomId));
                     } catch (error) {
-                        console.log("Error generating room ID: " + error);
+                        // console.log("Error generating room ID: " + error);
                         vscode.window.showErrorMessage(
                             "Error generating room ID: " +
                                 (error as Error).message
@@ -597,9 +607,9 @@ function registerCommands(
                 return data.success;
             }
         } catch (error) {
-            console.error(
-                "Error verifying password: " + (error as Error).message
-            );
+            // console.error(
+            //     "Error verifying password: " + (error as Error).message
+            // );
 
             throw error;
         }
@@ -621,9 +631,9 @@ function registerCommands(
                 return data.success;
             }
         } catch (error) {
-            console.error(
-                "Error verifying room ID: " + (error as Error).message
-            );
+            // console.error(
+            //     "Error verifying room ID: " + (error as Error).message
+            // );
 
             throw error;
         }
@@ -2150,5 +2160,5 @@ function registerCommands(
 }
 
 export function deactivate() {
-    console.log("Coducate extension is now deactivated.");
+    // console.log("Coducate extension is now deactivated.");
 }

@@ -1,9 +1,18 @@
 # Change Log
 
-All notable changes to the "coducate" extension will be documented in this file.
+All notable changes to the "Coducate" extension will be documented in this file.
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [0.0.1] - 2024-12-18
 
-## [Unreleased]
+### Added
 
--   Initial release
+-   Initial release of Coducate.
+-   Added functionality to start and end live coding sessions.
+-   Included participant access management (grant/revoke write access).
+-   Added session management tools.
+-   Introduced terminal and explorer controls (open/close/emulate).
+-   Added dynamic font size adjustment for sessions.
+-   Included note creation and management.
+-   Added commands to adjust the web view UI of Coducate.
+
+---

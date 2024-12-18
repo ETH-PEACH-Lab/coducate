@@ -1,71 +1,70 @@
-# coducate README
+# Coducate
 
-This is the README for your extension "coducate". After writing up a brief description, we recommend including the following sections.
-
-## Features
-
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
-
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
--   `myExtension.enable`: Enable/disable this extension.
--   `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
+**Coducate** is a VS Code extension designed to streamline instructor-led live coding sessions. Whether you are teaching programming concepts, demonstrating coding techniques, or conducting pair-programming exercises, Coducate provides all the necessary tools to make your live coding experience seamless and engaging.
 
 ---
 
-## Following extension guidelines
+## Features
 
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
+-   **Start and End Live Sessions:** Quickly initiate or conclude live coding sessions with ease.
+-   **Manage Participant Access:** Grant or revoke write access to participants during the session.
+-   **Session Management Tools:**
+    -   Copy Room ID for easy sharing with participants.
+    -   Manage ongoing sessions and control participant interactions.
+-   **Terminal and Explorer Controls:**
+    -   Emulate or open/close terminal and explorer views for a focused teaching environment.
+-   **Font Size Adjustments:** Dynamically adjust font size to ensure readability for participants.
+-   **Notes Management:** Create and manage notes directly within the session.
+-   **Code Suggestions:** Toggle suggestions on and off to enhance collaborative coding.
 
--   [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
+> Screenshot examples and animated walkthroughs coming soon!
 
-## Working with Markdown
+---
 
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
+## Requirements
 
--   Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
--   Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
--   Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
+Coducate requires the following:
 
-## For more information
+-   **VS Code Version:** 1.95.0 or higher.
 
--   [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
--   [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+---
 
-**Enjoy!**
+## Extension Settings
+
+Coducate currently provides the following settings for customization:
+
+-   **`coducate.enable`:** Enable or disable the Coducate extension.
+-   **`coducate.allowSuggestions`:** Toggle inline code suggestions (from notes) during sessions.
+
+---
+
+## Keybindings
+
+Coducate includes the following default keybindings:
+
+-   **Toggle Suggestions:** `Ctrl+Shift+U` (Windows/Linux), `Cmd+Shift+U` (Mac).
+-   **Accept Next Line Suggestion:** `Ctrl+Shift+Right` (Windows/Linux), `Cmd+Shift+Right` (Mac) when inline suggestions are visible.
+
+---
+
+## Known Issues
+
+-   No known issues at this time.
+
+---
+
+## Release Notes
+
+### 0.0.1
+
+-   Initial release of Coducate.
+-   Core features implemented:
+    -   Start and end sessions.
+    -   Grant and revoke write access.
+    -   Create and manage notes for copilot-like inline suggestions.
+    -   Terminal and Explorer controls.
+    -   Commands to adjust the web view UI of Coducate.
+
+---
+
+**Happy Coding!**

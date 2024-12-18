@@ -1,8 +1,14 @@
 {
     "name": "coducate",
     "displayName": "Coducate",
-    "description": "An extension for live coding sessions.",
+    "description": "An Extension to Streamline Instructor-Led Live Coding.",
     "version": "0.0.1",
+    "publisher": "coducate",
+    "icon": "public/coducate-logo.png",
+    "galleryBanner": {
+        "color": "#1E1E1E",
+        "theme": "dark"
+    },
     "engines": {
         "vscode": "^1.95.0"
     },
