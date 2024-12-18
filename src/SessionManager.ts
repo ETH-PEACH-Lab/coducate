@@ -85,10 +85,12 @@ export class SessionManager {
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
-            this.addAllFilesInDirectory(folder.uri.fsPath);
+            this.addAllFilesInDirectory(
+                path.posix.normalize(folder.uri.fsPath)
+            );
         });
 
-        this.notebookFilePath = path.join(
+        this.notebookFilePath = path.posix.join(
             os.tmpdir(),
             `coducateNotebook_${this.roomId}.txt`
         );
@@ -126,17 +128,26 @@ export class SessionManager {
     }
 
     public getRelativeFilePath(filePath: string): string {
+        const normalizedFilePath = path.posix.normalize(filePath);
         const workspaceFolder = vscode.workspace.workspaceFolders?.find(
-            (folder) => filePath.startsWith(folder.uri.fsPath)
+            (folder) =>
+                normalizedFilePath.startsWith(
+                    path.posix.normalize(folder.uri.fsPath) + path.posix.sep
+                )
         );
 
         if (workspaceFolder) {
-            const workspaceFolderPath = workspaceFolder.uri.fsPath;
-            const relativePath = path.relative(workspaceFolderPath, filePath);
+            const workspaceFolderPath = path.posix.normalize(
+                workspaceFolder.uri.fsPath
+            );
+            const relativePath = path.posix.relative(
+                workspaceFolderPath,
+                normalizedFilePath
+            );
             return `${workspaceFolder.name}/${relativePath}`;
         }
 
-        return filePath; // Return absolute path if file is not within any workspace folder
+        return normalizedFilePath; // Return absolute path if file is not within any workspace folder
     }
 
     private setupVSCodeListeners() {
@@ -158,9 +169,9 @@ export class SessionManager {
                     );
                 } else if (fileStat.type === vscode.FileType.Directory) {
                     // Rename folder and all files within it
-                    console.log(
-                        `Folder renamed: ${oldRelativePath} -> ${newRelativePath}`
-                    );
+                    // console.log(
+                    //     `Folder renamed: ${oldRelativePath} -> ${newRelativePath}`
+                    // );
                     await this.renameAllFilesInDirectory(
                         oldRelativePath,
                         newRelativePath
@@ -174,7 +185,7 @@ export class SessionManager {
             // Handle added workspace folders
             for (const addedFolder of event.added) {
                 const folderPath = addedFolder.uri.fsPath;
-                console.log("Workspace folder added: " + folderPath);
+                // console.log("Workspace folder added: " + folderPath);
 
                 // Add all files in the new folder to fileYMap
                 await this.addAllFilesInDirectory(folderPath);
@@ -183,10 +194,10 @@ export class SessionManager {
             // Handle removed workspace folders
             for (const removedFolder of event.removed) {
                 const folderPath = removedFolder.uri.fsPath;
-                console.log("Workspace folder removed: " + folderPath);
+                // console.log("Workspace folder removed: " + folderPath);
 
                 // Remove all files in the folder from fileYMap
-                this.removeAllFilesInDirectory(folderPath, removedFolder.name);
+                this.removeAllFilesInDirectory(removedFolder.name);
             }
         });
 
@@ -273,11 +284,11 @@ export class SessionManager {
                                 },
                             })
                         );
-                        console.log(
-                            `Instructor file sent: ${relativeFilePath}`
-                        );
+                        // console.log(
+                        //     `Instructor file sent: ${relativeFilePath}`
+                        // );
                     } catch (error) {
-                        console.error("Error sending instructor file:", error);
+                        // console.error("Error sending instructor file:", error);
                     }
                 }
             }
@@ -296,7 +307,7 @@ export class SessionManager {
                     await this.addFileToYMap(filePath, relativeFilePath);
                 } else if (fileStat.type === vscode.FileType.Directory) {
                     // Folder detected - add all files within this folder to fileYMap
-                    console.log(`Folder created: ${relativeFilePath}`);
+                    // console.log(`Folder created: ${relativeFilePath}`);
                     await this.addAllFilesInDirectory(filePath);
                 }
             }
@@ -310,27 +321,27 @@ export class SessionManager {
 
                 // Check if any entries in fileYMap start with the folder path
                 const isFolder = Array.from(this.fileYMap.keys()).some((key) =>
-                    key.startsWith(relativeFilePath + path.sep)
+                    key.startsWith(relativeFilePath + path.posix.sep)
                 );
 
                 if (isFolder) {
                     // If it's a folder, delete all entries within that path
-                    console.log(`Folder deleted: ${relativeFilePath}`);
+                    // console.log(`Folder deleted: ${relativeFilePath}`);
                     for (const key of Array.from(this.fileYMap.keys())) {
-                        if (key.startsWith(relativeFilePath + path.sep)) {
+                        if (key.startsWith(relativeFilePath + path.posix.sep)) {
                             this.fileYMap.delete(key);
-                            console.log(
-                                `File deleted from folder in fileYMap: ${key}`
-                            );
+                            // console.log(
+                            //     `File deleted from folder in fileYMap: ${key}`
+                            // );
                         }
                     }
                 } else {
                     // If it's a single file, delete only that specific entry
                     if (this.fileYMap.has(relativeFilePath)) {
                         this.fileYMap.delete(relativeFilePath);
-                        console.log(
-                            `File deleted from fileYMap: ${relativeFilePath}`
-                        );
+                        // console.log(
+                        //     `File deleted from fileYMap: ${relativeFilePath}`
+                        // );
                     }
                 }
             }
@@ -450,53 +461,56 @@ export class SessionManager {
                 const content = document.getText();
                 yText.insert(0, content);
 
-                console.log(`File added to fileYMap: ${relativeFilePath}`);
+                // console.log(`File added to fileYMap: ${relativeFilePath}`);
             } catch (error) {
-                console.log(
-                    `Error opening file: ${relativeFilePath}. Probably binary.`
-                );
+                // console.log(
+                //     `Error opening file: ${relativeFilePath}. Probably binary.`
+                // );
             }
         }
     }
 
     // Function to add all files within a directory to fileYMap
     private async addAllFilesInDirectory(folderPath: string) {
+        const normalizedFolderPath = path.posix.normalize(folderPath);
+
         // Find all files in the created directory
         const files = await vscode.workspace.findFiles(
-            new vscode.RelativePattern(folderPath, "**/*")
+            new vscode.RelativePattern(normalizedFolderPath, "**/*")
         );
 
         for (const file of files) {
-            const filePath = file.fsPath;
-            const relativeFilePath = this.getRelativeFilePath(filePath);
+            const normalizedFilePath = path.posix.normalize(file.fsPath);
+            const relativeFilePath =
+                this.getRelativeFilePath(normalizedFilePath);
 
             // Skip files in excluded directories
-            if (this.isExcludedDirectory(filePath)) {
+            if (this.isExcludedDirectory(normalizedFilePath)) {
                 continue;
             }
 
             const fileStat = await vscode.workspace.fs.stat(file);
             if (fileStat.type === vscode.FileType.File) {
-                await this.addFileToYMap(filePath, relativeFilePath);
+                await this.addFileToYMap(normalizedFilePath, relativeFilePath);
             }
         }
     }
 
     // Helper function to check if a file is within an excluded directory
     private isExcludedDirectory(filePath: string): boolean {
-        const pathSegments = filePath.split(path.sep);
+        const pathSegments = filePath.split(path.posix.sep);
         return pathSegments.some((segment) =>
             EXCLUDED_DIRECTORIES.has(segment)
         );
     }
 
     // Function to remove all files within a directory from fileYMap
-    private removeAllFilesInDirectory(folderPath: string, folderName: string) {
-        // Identify files in fileYMap that are within the specified folder path
+    private removeAllFilesInDirectory(folderName: string) {
+        const normalizedFolderName = path.posix.normalize(folderName);
         for (const key of Array.from(this.fileYMap.keys())) {
-            if (key.startsWith(`${folderName}/`)) {
+            if (key.startsWith(`${normalizedFolderName}/`)) {
                 this.fileYMap.delete(key);
-                console.log(`File removed from fileYMap: ${key}`);
+                // console.log(`File removed from fileYMap: ${key}`);
             }
         }
     }
@@ -520,15 +534,23 @@ export class SessionManager {
                 newYText.insert(0, oldYText.toString());
             }
 
-            // Remove the old entry and add the new one
-            this.fileYMap.delete(oldRelativePath);
-            this.fileYMap.set(newRelativePath, newYText!);
+            if (newYText) {
+                // Remove the old entry and add the new one
+                this.fileYMap.delete(oldRelativePath);
+                this.fileYMap.set(newRelativePath, newYText);
 
-            console.log(`Renamed: ${oldRelativePath} -> ${newRelativePath}`);
+                // console.log(
+                //     `Renamed: ${oldRelativePath} -> ${newRelativePath}`
+                // );
+            } else {
+                // console.log(
+                //     `Rename error: ${newRelativePath} not found in fileYMap.`
+                // );
+            }
         } else {
-            console.log(
-                `Rename error: ${oldRelativePath} not found in fileYMap.`
-            );
+            // console.log(
+            //     `Rename error: ${oldRelativePath} not found in fileYMap.`
+            // );
         }
     }
 
@@ -537,13 +559,16 @@ export class SessionManager {
         oldRelativePath: string,
         newRelativePath: string
     ) {
+        const normalizedOldPath = path.posix.normalize(oldRelativePath);
+        const normalizedNewPath = path.posix.normalize(newRelativePath);
+
         // Find all entries in fileYMap that start with the old folder path
         const keysToRename = Array.from(this.fileYMap.keys()).filter((key) =>
-            key.startsWith(oldRelativePath + path.sep)
+            key.startsWith(normalizedOldPath + path.posix.sep)
         );
 
         for (const oldKey of keysToRename) {
-            const newKey = oldKey.replace(oldRelativePath, newRelativePath);
+            const newKey = oldKey.replace(normalizedOldPath, normalizedNewPath);
             // Reuse renameFileInYMap to handle each file rename
             await this.renameFileInYMap(oldKey, newKey);
         }
