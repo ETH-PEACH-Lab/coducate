@@ -1,12 +1,12 @@
 {
     "name": "coducate",
     "displayName": "Coducate",
-    "description": "An Extension to Streamline Instructor-Led Live Coding.",
-    "version": "0.0.2",
+    "description": "Facilitates Live Coding.",
+    "version": "0.0.1",
     "publisher": "coducate",
     "icon": "public/coducate-logo-128.png",
-    "galleryBanner": {
-        "color": "#1E1E1E",
+    "galleryBanner.color": {
+        "color": "#1e1e1e",
         "theme": "dark"
     },
     "engines": {
