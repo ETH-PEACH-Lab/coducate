@@ -4,7 +4,7 @@
     "description": "An Extension to Streamline Instructor-Led Live Coding.",
     "version": "0.0.1",
     "publisher": "coducate",
-    "icon": "public/coducate-logo.png",
+    "icon": "public/coducate-logo-128.png",
     "galleryBanner": {
         "color": "#1E1E1E",
         "theme": "dark"
