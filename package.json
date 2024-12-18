@@ -2,7 +2,7 @@
     "name": "coducate",
     "displayName": "Coducate",
     "description": "An Extension to Streamline Instructor-Led Live Coding.",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "publisher": "coducate",
     "icon": "public/coducate-logo-128.png",
     "galleryBanner": {
