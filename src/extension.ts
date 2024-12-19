@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import path from "path";
 import {
     uniqueNamesGenerator,
     adjectives,
@@ -86,7 +87,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     // Restore session if a roomId exists
-    const roomId = context.globalState.get<string>(ROOM_ID_KEY);
+    const roomId = context.workspaceState.get<string>(ROOM_ID_KEY);
     if (roomId) {
         sessionManager = initializeSession(
             context,
@@ -129,18 +130,26 @@ function initializeSession(
         arguments: [roomId],
     };
 
+    const showRoomIdMessage = (message: string) => {
+        vscode.window
+            .showInformationMessage(message, "Copy Room ID")
+            .then((selection) => {
+                if (selection === "Copy Room ID") {
+                    vscode.env.clipboard.writeText(roomId).then(() => {
+                        vscode.window.showInformationMessage(
+                            "Room ID copied to clipboard!"
+                        );
+                    });
+                }
+            });
+    };
+
     if (sessionType === SessionType.RESTORED_SESSION) {
-        vscode.window.showInformationMessage(
-            "Live coding session restored. Room ID: " + roomId
-        );
+        showRoomIdMessage("Live coding session restored. Room ID: " + roomId);
     } else if (sessionType === SessionType.NEW_SESSION) {
-        vscode.window.showInformationMessage(
-            "Live coding session started. Room ID: " + roomId
-        );
+        showRoomIdMessage("Live coding session started. Room ID: " + roomId);
     } else if (sessionType === SessionType.EXISTING_SESSION) {
-        vscode.window.showInformationMessage(
-            "Live coding session joined. Room ID: " + roomId
-        );
+        showRoomIdMessage("Live coding session joined. Room ID: " + roomId);
     }
 
     // Capture the currently active file in the editor
@@ -241,7 +250,7 @@ function registerCommands(
         async () => {
             // Check if a WebSocket session is already running
             if (sessionManager) {
-                vscode.window.showInformationMessage(
+                vscode.window.showErrorMessage(
                     "A live coding session is already running."
                 );
                 status.text = "$(sync) Coducate";
@@ -256,25 +265,33 @@ function registerCommands(
             );
 
             if (!sessionType) {
-                vscode.window.showErrorMessage(
-                    "Session type selection is required."
-                );
                 return;
             }
 
             if (sessionType === "New Session") {
-                // Prompt user for a session name
-                const sessionName = await vscode.window.showInputBox({
-                    prompt: "Enter an easy-to-remember session name",
-                    placeHolder: "E.g., 'Computer Systems Lecture 10'",
-                });
+                const alreadyExistingSessions =
+                    context.globalState.get<{
+                        [key: string]: { roomId: string; password: string };
+                    }>("coducate.sessions") || {};
+                let sessionName;
+                do {
+                    sessionName = await vscode.window.showInputBox({
+                        prompt:
+                            sessionName && alreadyExistingSessions[sessionName]
+                                ? `The session name '${sessionName}' already exists. Enter a different name or use the Manage Sessions command to delete the existing session.`
+                                : "Enter an easy-to-remember session name",
+                        placeHolder: "E.g., 'Computer Systems Lecture 10'",
+                    });
 
-                if (!sessionName) {
-                    vscode.window.showErrorMessage(
-                        "Session name cannot be empty."
-                    );
-                    return;
-                }
+                    if (sessionName === "") {
+                        vscode.window.showErrorMessage(
+                            "Session name cannot be empty."
+                        );
+                        return;
+                    } else if (!sessionName) {
+                        return;
+                    }
+                } while (alreadyExistingSessions[sessionName]);
 
                 // Prompt user for a password
                 const password = await vscode.window.showInputBox({
@@ -283,104 +300,28 @@ function registerCommands(
                     password: true,
                 });
 
-                if (!password) {
+                if (password === "") {
                     vscode.window.showErrorMessage("Password cannot be empty.");
+                    return;
+                } else if (!password) {
                     return;
                 }
 
-                const action = await vscode.window.showQuickPick(
-                    ["Use Existing Files", "Create New Files"],
+                const taskDescriptionAction = await vscode.window.showQuickPick(
+                    ["Yes", "No"],
                     {
                         placeHolder:
-                            "Would you like to use existing or create new task_description.md and learning_goals.md?",
+                            "Would you like to add a task description? (Markdown file)",
                     }
                 );
 
-                if (!action) {
-                    vscode.window.showErrorMessage(
-                        "Action selection is required."
-                    );
+                if (taskDescriptionAction === undefined) {
+                    // vscode.window.showErrorMessage("Selection is required.");
                     return;
                 }
 
                 let taskDescriptionPath: vscode.Uri | undefined;
-                let learningGoalsPath: vscode.Uri | undefined;
-
-                if (action === "Create New Files") {
-                    const workspaceFolders = vscode.workspace.workspaceFolders;
-
-                    if (!workspaceFolders || workspaceFolders.length === 0) {
-                        vscode.window.showErrorMessage(
-                            "No workspace folder is open. Please open a folder and try again."
-                        );
-                        return;
-                    }
-
-                    let targetFolder: vscode.WorkspaceFolder;
-
-                    if (workspaceFolders.length === 1) {
-                        targetFolder = workspaceFolders[0];
-                    } else {
-                        const folderNames = workspaceFolders.map(
-                            (folder) => folder.name
-                        );
-                        const selectedFolderName =
-                            await vscode.window.showQuickPick(folderNames, {
-                                placeHolder: "Select a workspace folder",
-                            });
-
-                        if (!selectedFolderName) {
-                            vscode.window.showErrorMessage(
-                                "You must select a workspace folder."
-                            );
-                            return;
-                        }
-
-                        let selectedFolder = workspaceFolders.find(
-                            (folder) => folder.name === selectedFolderName
-                        );
-
-                        if (!selectedFolder) {
-                            vscode.window.showErrorMessage(
-                                "Selected folder not found."
-                            );
-                            return;
-                        }
-
-                        targetFolder = selectedFolder;
-                    }
-
-                    const taskDescriptionFileUri = vscode.Uri.joinPath(
-                        targetFolder.uri,
-                        "task_description.md"
-                    );
-                    const learningGoalsFileUri = vscode.Uri.joinPath(
-                        targetFolder.uri,
-                        "learning_goals.md"
-                    );
-
-                    // Write default content to files
-                    await vscode.workspace.fs.writeFile(
-                        taskDescriptionFileUri,
-                        Buffer.from(
-                            "# Task Description\n\nEnter your task description here."
-                        )
-                    );
-                    await vscode.workspace.fs.writeFile(
-                        learningGoalsFileUri,
-                        Buffer.from(
-                            "# Learning Goals\n\n- Enter your learning goals here."
-                        )
-                    );
-
-                    taskDescriptionPath = taskDescriptionFileUri;
-                    learningGoalsPath = learningGoalsFileUri;
-
-                    vscode.window.showInformationMessage(
-                        `Created 'task_description.md' and 'learning_goals.md' in ${targetFolder.name}.`
-                    );
-                } else {
-                    // Use existing files
+                if (taskDescriptionAction === "Yes") {
                     const taskDescriptionPaths =
                         await vscode.window.showOpenDialog({
                             canSelectFiles: true,
@@ -388,10 +329,38 @@ function registerCommands(
                             filters: {
                                 Markdown: ["md"],
                             },
-                            title: "Select task_description.md",
+                            title: "Select task description file",
                             openLabel: "Select as task description",
                         });
 
+                    if (
+                        !taskDescriptionPaths ||
+                        taskDescriptionPaths.length === 0
+                    ) {
+                        vscode.window.showErrorMessage(
+                            "You must select a task description Markdown file."
+                        );
+                        return;
+                    }
+
+                    taskDescriptionPath = taskDescriptionPaths[0];
+                }
+
+                const learningGoalsAction = await vscode.window.showQuickPick(
+                    ["Yes", "No"],
+                    {
+                        placeHolder:
+                            "Would you like to add learning goals? (Markdown file)",
+                    }
+                );
+
+                if (learningGoalsAction === undefined) {
+                    // vscode.window.showErrorMessage("Selection is required.");
+                    return;
+                }
+
+                let learningGoalsPath: vscode.Uri | undefined;
+                if (learningGoalsAction === "Yes") {
                     const learningGoalsPaths =
                         await vscode.window.showOpenDialog({
                             canSelectFiles: true,
@@ -399,18 +368,20 @@ function registerCommands(
                             filters: {
                                 Markdown: ["md"],
                             },
-                            title: "Select learning_goals.md",
+                            title: "Select learning goals file",
                             openLabel: "Select as learning goals",
                         });
 
-                    if (!taskDescriptionPaths || !learningGoalsPaths) {
+                    if (
+                        !learningGoalsPaths ||
+                        learningGoalsPaths.length === 0
+                    ) {
                         vscode.window.showErrorMessage(
-                            "Both task_description.md and learning_goals.md must be selected."
+                            "You must select a learning goals Markdown file."
                         );
                         return;
                     }
 
-                    taskDescriptionPath = taskDescriptionPaths[0];
                     learningGoalsPath = learningGoalsPaths[0];
                 }
 
@@ -433,7 +404,7 @@ function registerCommands(
                     }
                 }
 
-                context.globalState.update(ROOM_ID_KEY, newRoomId);
+                context.workspaceState.update(ROOM_ID_KEY, newRoomId);
 
                 // Store the mapping of session name to room ID and password
                 const existingSessions =
@@ -441,10 +412,18 @@ function registerCommands(
                         [key: string]: { roomId: string; password: string };
                     }>("coducate.sessions") || {};
                 existingSessions[sessionName] = { roomId: newRoomId, password };
-                await context.globalState.update(
-                    "coducate.sessions",
-                    existingSessions
-                );
+
+                try {
+                    await context.globalState.update(
+                        "coducate.sessions",
+                        existingSessions
+                    );
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        "Failed to store session mappings."
+                    );
+                    return;
+                }
 
                 sessionManager = initializeSession(
                     context,
@@ -453,20 +432,44 @@ function registerCommands(
                     SessionType.NEW_SESSION
                 );
 
-                if (action === "Use Existing Files") {
+                if (taskDescriptionPath) {
                     try {
                         await sessionManager.addFileToYMap(
-                            taskDescriptionPath.fsPath,
-                            taskDescriptionPath.fsPath
-                        );
-                        await sessionManager.addFileToYMap(
-                            learningGoalsPath.fsPath,
-                            learningGoalsPath.fsPath
+                            path.posix.normalize(taskDescriptionPath.fsPath),
+                            path.posix.normalize(taskDescriptionPath.fsPath)
                         );
                     } catch (error) {
                         vscode.window.showErrorMessage(
-                            "Failed to add task description and learning goals."
+                            "Failed to add task description."
                         );
+
+                        // End the session if the task description fails to load
+                        sessionManager.dispose();
+                        sessionManager = undefined;
+                        status.text = "$(sync-ignored) Coducate";
+                        context.workspaceState.update(ROOM_ID_KEY, undefined);
+
+                        return;
+                    }
+                }
+
+                if (learningGoalsPath) {
+                    try {
+                        await sessionManager.addFileToYMap(
+                            path.posix.normalize(learningGoalsPath.fsPath),
+                            path.posix.normalize(learningGoalsPath.fsPath)
+                        );
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            "Failed to add learning goals."
+                        );
+
+                        // End the session if the learning goals fail to load
+                        sessionManager.dispose();
+                        sessionManager = undefined;
+                        status.text = "$(sync-ignored) Coducate";
+                        context.workspaceState.update(ROOM_ID_KEY, undefined);
+
                         return;
                     }
                 }
@@ -477,36 +480,72 @@ function registerCommands(
 
                     if (controlWebSocket.readyState === WebSocket.OPEN) {
                         try {
-                            const passwordSuccessfullySet =
-                                await sendSessionData(
-                                    controlWebSocket,
-                                    password,
-                                    taskDescriptionPath.fsPath,
-                                    learningGoalsPath.fsPath,
-                                    newRoomId
-                                );
+                            await sendSessionData(
+                                controlWebSocket,
+                                password,
+                                taskDescriptionPath
+                                    ? path.posix.normalize(
+                                          taskDescriptionPath.fsPath
+                                      )
+                                    : "",
+                                learningGoalsPath
+                                    ? path.posix.normalize(
+                                          learningGoalsPath.fsPath
+                                      )
+                                    : "",
+                                newRoomId
+                            );
                         } catch (error) {
                             vscode.window.showErrorMessage(
                                 "Failed to set room password securely."
                             );
+
+                            // End the session if the password fails to set
+                            sessionManager.dispose();
+                            sessionManager = undefined;
+                            status.text = "$(sync-ignored) Coducate";
+                            context.workspaceState.update(
+                                ROOM_ID_KEY,
+                                undefined
+                            );
+
+                            return;
                         }
                     } else if (
                         controlWebSocket.readyState === WebSocket.CONNECTING
                     ) {
                         controlWebSocket.addEventListener("open", async () => {
                             try {
-                                const passwordSuccessfullySet =
-                                    await sendSessionData(
-                                        controlWebSocket,
-                                        password,
-                                        taskDescriptionPath.fsPath,
-                                        learningGoalsPath.fsPath,
-                                        newRoomId
-                                    );
+                                await sendSessionData(
+                                    controlWebSocket,
+                                    password,
+                                    taskDescriptionPath
+                                        ? path.posix.normalize(
+                                              taskDescriptionPath.fsPath
+                                          )
+                                        : "",
+                                    learningGoalsPath
+                                        ? path.posix.normalize(
+                                              learningGoalsPath.fsPath
+                                          )
+                                        : "",
+                                    newRoomId
+                                );
                             } catch (error) {
                                 vscode.window.showErrorMessage(
                                     "Failed to set room password securely."
                                 );
+
+                                // End the session if the password fails to set
+                                sessionManager?.dispose();
+                                sessionManager = undefined;
+                                status.text = "$(sync-ignored) Coducate";
+                                context.workspaceState.update(
+                                    ROOM_ID_KEY,
+                                    undefined
+                                );
+
+                                return;
                             }
                         });
                     } else {
@@ -535,7 +574,7 @@ function registerCommands(
                 );
 
                 if (sessionChoices.length === 0) {
-                    vscode.window.showInformationMessage(
+                    vscode.window.showErrorMessage(
                         "No existing sessions found. Please create a new session first."
                     );
                     return;
@@ -549,9 +588,6 @@ function registerCommands(
                 );
 
                 if (!selectedSession) {
-                    vscode.window.showErrorMessage(
-                        "You must select an existing session."
-                    );
                     return;
                 }
 
@@ -576,7 +612,7 @@ function registerCommands(
                     return;
                 }
 
-                context.globalState.update(ROOM_ID_KEY, roomId);
+                context.workspaceState.update(ROOM_ID_KEY, roomId);
 
                 sessionManager = initializeSession(
                     context,
@@ -590,52 +626,33 @@ function registerCommands(
 
     // Helper function to verify the password
     async function verifyPassword(password: string, roomId: string) {
-        try {
-            const response = await fetch(
-                `${BACKEND_HOST}/api/verify-password`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({ password, roomId }),
-                }
-            );
+        const response = await fetch(`${BACKEND_HOST}/api/verify-password`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ password, roomId }),
+        });
 
-            if (response.ok) {
-                const data = await response.json();
-                return data.success;
-            }
-        } catch (error) {
-            // console.error(
-            //     "Error verifying password: " + (error as Error).message
-            // );
-
-            throw error;
+        if (response.ok) {
+            const data = await response.json();
+            return data.success;
         }
     }
 
     // Helper function to check if the room ID already exists
     async function isRoomExisting(roomId: string) {
-        try {
-            const response = await fetch(`${BACKEND_HOST}/api/verify-room`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ roomId }),
-            });
+        const response = await fetch(`${BACKEND_HOST}/api/verify-room`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ roomId }),
+        });
 
-            if (response.ok) {
-                const data = await response.json();
-                return data.success;
-            }
-        } catch (error) {
-            // console.error(
-            //     "Error verifying room ID: " + (error as Error).message
-            // );
-
-            throw error;
+        if (response.ok) {
+            const data = await response.json();
+            return data.success;
         }
     }
 
@@ -697,7 +714,7 @@ function registerCommands(
                 sessionManager.dispose();
                 sessionManager = undefined;
                 status.text = "$(sync-ignored) Coducate";
-                context.globalState.update(ROOM_ID_KEY, undefined);
+                context.workspaceState.update(ROOM_ID_KEY, undefined);
                 vscode.window.showInformationMessage(
                     "Live coding session ended."
                 );
@@ -806,7 +823,7 @@ function registerCommands(
                     });
 
                     if (!newSessionName) {
-                        vscode.window.showErrorMessage(
+                        vscode.window.showWarningMessage(
                             "Session was not renamed."
                         );
                         continue;
@@ -844,7 +861,7 @@ function registerCommands(
                             `Session '${selectedSessionName}' deleted successfully.`
                         );
                     } else {
-                        vscode.window.showInformationMessage(
+                        vscode.window.showWarningMessage(
                             `Cancelled deletion. No changes were made.`
                         );
                     }
@@ -1942,6 +1959,110 @@ function registerCommands(
         }
     );
 
+    // Command to toggle theme
+    const changeThemeCommand = vscode.commands.registerCommand(
+        "coducate.changeTheme",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage(
+                    "No active session found. Please start a session first."
+                );
+                return;
+            }
+
+            if (sessionManager && sessionManager.getControlWebSocket()) {
+                // Prompt user to select theme
+                const theme = await vscode.window.showQuickPick(
+                    ["Dark", "Light"],
+                    {
+                        placeHolder: "Select theme",
+                    }
+                );
+
+                if (!theme) {
+                    return;
+                }
+
+                const selectedTheme = theme.toLowerCase();
+
+                const sendThemeChangeRequest = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            sessionManager?.getControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "themeChanged" &&
+                                        payload.changedTheme ===
+                                            selectedTheme &&
+                                        payload.roomId ===
+                                            sessionManager?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "requestThemeChange",
+                                    payload: {
+                                        changedTheme: selectedTheme,
+                                        roomId: sessionManager?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error("Theme toggle request timed out")
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const themeToggled = await sendThemeChangeRequest();
+                    if (themeToggled) {
+                        vscode.window.showInformationMessage(
+                            `Theme toggled to ${theme} mode successfully.`
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
     // Command to create notes from selected text and delete the entire lines
     const createNotesCommand = vscode.commands.registerCommand(
         "coducate.createNote",
@@ -1965,7 +2086,7 @@ function registerCommands(
                     });
 
                     if (!title) {
-                        vscode.window.showWarningMessage(
+                        vscode.window.showErrorMessage(
                             "Note title cannot be empty."
                         );
                         return;
@@ -2005,7 +2126,7 @@ function registerCommands(
 
                     notesCodeLensProvider?.refresh();
                 } else {
-                    vscode.window.showInformationMessage("No code selected.");
+                    vscode.window.showWarningMessage("No code selected.");
                 }
             }
         }
@@ -2152,6 +2273,7 @@ function registerCommands(
         requestExplorerOpen,
         requestExplorerClose,
         adjustFontSizeCommand,
+        changeThemeCommand,
         createNotesCommand,
         handleNoteActionCommand,
         removeNoteCommand,
