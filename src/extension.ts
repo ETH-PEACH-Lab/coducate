@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
-import path from "path";
+import * as os from "os";
+import * as path from "path";
+import * as fs from "fs/promises";
 import {
     uniqueNamesGenerator,
     adjectives,
@@ -257,6 +259,99 @@ function registerCommands(
                 return;
             }
 
+            // Check if the workspace is not stored (workspaceFile exists) or is untitled
+            if (
+                !vscode.workspace.workspaceFile ||
+                vscode.workspace.workspaceFile.scheme === "untitled"
+            ) {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (
+                    !workspaceFolders ||
+                    (workspaceFolders && workspaceFolders.length === 0)
+                ) {
+                    vscode.window.showErrorMessage(
+                        "No workspace folders found. Please add a folder to the workspace first."
+                    );
+                    return;
+                }
+
+                const saveWorkspaceResponse =
+                    await vscode.window.showWarningMessage(
+                        "It is highly recommended to save your current workspace as a workspace file. This guarantees that different Coducate sessions in multiple VS Code windows do not conflict. Additionally, if multiple root folders are added to the workspace, saving it prevents the need to manually restart the session. Would you like to save the current workspace?",
+                        "Yes",
+                        "No"
+                    );
+
+                if (saveWorkspaceResponse === "Yes") {
+                    // Notify the user to execute the Start Session command again after saving the workspace
+                    await vscode.window.showInformationMessage(
+                        "A new window will be opened with the correct workspace configuration already set up. Please restart the session in the new window. Click 'Ok' to confirm.",
+                        "Ok"
+                    );
+
+                    // Create a new workspace with the current folders
+                    if (workspaceFolders) {
+                        const workspaceContent = {
+                            folders: workspaceFolders.map((folder) => ({
+                                uri: folder.uri.toString(),
+                            })),
+                            settings: {},
+                        };
+
+                        try {
+                            // Write the workspace configurations to a temporary file
+                            const tempDir = os.tmpdir();
+                            const untitledWorkspacePath = path.join(
+                                tempDir,
+                                `coducate-${Date.now()}.code-workspace`
+                            );
+
+                            await fs.writeFile(
+                                untitledWorkspacePath,
+                                JSON.stringify(workspaceContent, null, 2)
+                            );
+
+                            await vscode.commands.executeCommand(
+                                "vscode.openFolder",
+                                vscode.Uri.file(untitledWorkspacePath),
+                                true
+                            );
+
+                            await vscode.window.showWarningMessage(
+                                "Do NOT use Coducate in this window. A new window has been opened with the correct workspace configuration. Please restart the session in the new window. Coducate will automatically return to this window after the session has ended.",
+                                "Ok"
+                            );
+                            return;
+                        } catch {
+                            vscode.window.showErrorMessage(
+                                "Failed to save the workspace. Try starting the session again."
+                            );
+                            return;
+                        }
+                    } else {
+                        vscode.window.showErrorMessage(
+                            "Failed to save the workspace. Try starting the session again."
+                        );
+                        return;
+                    }
+                } else {
+                    const warningResponse =
+                        await vscode.window.showWarningMessage(
+                            "Proceeding without saving the workspace may cause unexpected behavior. Click 'Ok' to continue or 'Cancel' to abort.",
+                            "Ok",
+                            "Cancel"
+                        );
+
+                    // Abort the session start if the user cancels
+                    if (warningResponse === "Cancel") {
+                        vscode.window.showInformationMessage(
+                            "Session start aborted."
+                        );
+                        return;
+                    }
+                }
+            }
+
             const sessionType = await vscode.window.showQuickPick(
                 ["New Session", "Existing Session"],
                 {
@@ -435,8 +530,12 @@ function registerCommands(
                 if (taskDescriptionPath) {
                     try {
                         await sessionManager.addFileToYMap(
-                            path.posix.normalize(taskDescriptionPath.fsPath),
-                            path.posix.normalize(taskDescriptionPath.fsPath)
+                            sessionManager.toPosixPath(
+                                taskDescriptionPath.fsPath
+                            ),
+                            sessionManager.toPosixPath(
+                                taskDescriptionPath.fsPath
+                            )
                         );
                     } catch (error) {
                         vscode.window.showErrorMessage(
@@ -456,8 +555,10 @@ function registerCommands(
                 if (learningGoalsPath) {
                     try {
                         await sessionManager.addFileToYMap(
-                            path.posix.normalize(learningGoalsPath.fsPath),
-                            path.posix.normalize(learningGoalsPath.fsPath)
+                            sessionManager.toPosixPath(
+                                learningGoalsPath.fsPath
+                            ),
+                            sessionManager.toPosixPath(learningGoalsPath.fsPath)
                         );
                     } catch (error) {
                         vscode.window.showErrorMessage(
@@ -484,12 +585,12 @@ function registerCommands(
                                 controlWebSocket,
                                 password,
                                 taskDescriptionPath
-                                    ? path.posix.normalize(
+                                    ? sessionManager.toPosixPath(
                                           taskDescriptionPath.fsPath
                                       )
                                     : "",
                                 learningGoalsPath
-                                    ? path.posix.normalize(
+                                    ? sessionManager.toPosixPath(
                                           learningGoalsPath.fsPath
                                       )
                                     : "",
@@ -515,37 +616,43 @@ function registerCommands(
                         controlWebSocket.readyState === WebSocket.CONNECTING
                     ) {
                         controlWebSocket.addEventListener("open", async () => {
-                            try {
-                                await sendSessionData(
-                                    controlWebSocket,
-                                    password,
-                                    taskDescriptionPath
-                                        ? path.posix.normalize(
-                                              taskDescriptionPath.fsPath
-                                          )
-                                        : "",
-                                    learningGoalsPath
-                                        ? path.posix.normalize(
-                                              learningGoalsPath.fsPath
-                                          )
-                                        : "",
-                                    newRoomId
-                                );
-                            } catch (error) {
+                            if (sessionManager) {
+                                try {
+                                    await sendSessionData(
+                                        controlWebSocket,
+                                        password,
+                                        taskDescriptionPath
+                                            ? sessionManager.toPosixPath(
+                                                  taskDescriptionPath.fsPath
+                                              )
+                                            : "",
+                                        learningGoalsPath
+                                            ? sessionManager.toPosixPath(
+                                                  learningGoalsPath.fsPath
+                                              )
+                                            : "",
+                                        newRoomId
+                                    );
+                                } catch (error) {
+                                    vscode.window.showErrorMessage(
+                                        "Failed to set room password securely."
+                                    );
+
+                                    // End the session if the password fails to set
+                                    sessionManager.dispose();
+                                    sessionManager = undefined;
+                                    status.text = "$(sync-ignored) Coducate";
+                                    context.workspaceState.update(
+                                        ROOM_ID_KEY,
+                                        undefined
+                                    );
+
+                                    return;
+                                }
+                            } else {
                                 vscode.window.showErrorMessage(
-                                    "Failed to set room password securely."
+                                    "Failed to set room password securely. WebSocket is not initialized."
                                 );
-
-                                // End the session if the password fails to set
-                                sessionManager?.dispose();
-                                sessionManager = undefined;
-                                status.text = "$(sync-ignored) Coducate";
-                                context.workspaceState.update(
-                                    ROOM_ID_KEY,
-                                    undefined
-                                );
-
-                                return;
                             }
                         });
                     } else {
@@ -709,15 +816,49 @@ function registerCommands(
 
     const endCommand = vscode.commands.registerCommand(
         "coducate.endSession",
-        () => {
+        async () => {
             if (sessionManager) {
                 sessionManager.dispose();
                 sessionManager = undefined;
                 status.text = "$(sync-ignored) Coducate";
                 context.workspaceState.update(ROOM_ID_KEY, undefined);
+
                 vscode.window.showInformationMessage(
-                    "Live coding session ended."
+                    "Live Coding Session ended."
                 );
+
+                // Return if the current window uses an untitled workspace or no workspace
+                if (
+                    !vscode.workspace.workspaceFile ||
+                    vscode.workspace.workspaceFile.scheme === "untitled"
+                ) {
+                    return;
+                }
+
+                // Notify the user about the upcoming window close
+                const confirmation = await vscode.window.showWarningMessage(
+                    "This window will be closed to clean up the Coducate workspace created for this session. All changes will be saved. Click 'Ok' to confirm.",
+                    "Ok",
+                    "Cancel"
+                );
+
+                if (confirmation === "Ok") {
+                    if (vscode.workspace.workspaceFile) {
+                        // Use closeFolder to remove the workspace
+                        await vscode.commands.executeCommand(
+                            "workbench.action.closeFolder"
+                        );
+                    }
+
+                    // Close the current VS Code window
+                    await vscode.commands.executeCommand(
+                        "workbench.action.closeWindow"
+                    );
+                } else {
+                    vscode.window.showInformationMessage(
+                        "Session cleanup canceled. Workspace will remain open."
+                    );
+                }
             } else {
                 vscode.window.showErrorMessage("No active session found.");
             }
@@ -1462,10 +1603,14 @@ function registerCommands(
                 return;
             }
 
+            // Check if OS is Windows
+            const isWindows = os.platform() === "win32";
+            const runningProcess = isWindows ? "WSL (Bash)" : "Bash";
+
             const task = new vscode.Task(
                 { type: "runBash" },
                 vscode.TaskScope.Workspace,
-                "Running Bash",
+                `Running ${runningProcess}`,
                 "Emulated Terminal",
                 new vscode.CustomExecution(
                     async (): Promise<vscode.Pseudoterminal> =>

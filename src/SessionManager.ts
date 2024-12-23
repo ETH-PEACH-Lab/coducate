@@ -85,9 +85,7 @@ export class SessionManager {
 
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
-            this.addAllFilesInDirectory(
-                path.posix.normalize(folder.uri.fsPath)
-            );
+            this.addAllFilesInDirectory(this.toPosixPath(folder.uri.fsPath));
         });
 
         this.notebookFilePath = path.posix.join(
@@ -127,17 +125,21 @@ export class SessionManager {
         return this.inlineCompletionProvider;
     }
 
+    public toPosixPath(filePath: string): string {
+        return filePath.replace(/\\/g, "/");
+    }
+
     public getRelativeFilePath(filePath: string): string {
-        const normalizedFilePath = path.posix.normalize(filePath);
+        const normalizedFilePath = this.toPosixPath(filePath);
         const workspaceFolder = vscode.workspace.workspaceFolders?.find(
             (folder) =>
                 normalizedFilePath.startsWith(
-                    path.posix.normalize(folder.uri.fsPath) + path.posix.sep
+                    this.toPosixPath(folder.uri.fsPath) + path.posix.sep
                 )
         );
 
         if (workspaceFolder) {
-            const workspaceFolderPath = path.posix.normalize(
+            const workspaceFolderPath = this.toPosixPath(
                 workspaceFolder.uri.fsPath
             );
             const relativePath = path.posix.relative(
@@ -193,7 +195,7 @@ export class SessionManager {
 
             // Handle removed workspace folders
             for (const removedFolder of event.removed) {
-                const folderPath = removedFolder.uri.fsPath;
+                // const folderPath = removedFolder.uri.fsPath;
                 // console.log("Workspace folder removed: " + folderPath);
 
                 // Remove all files in the folder from fileYMap
@@ -201,6 +203,7 @@ export class SessionManager {
             }
         });
 
+        // Listen to file changes
         vscode.workspace.onDidChangeTextDocument((event) => {
             if (event.document === vscode.window.activeTextEditor?.document) {
                 this.applyIncrementalChanges(
@@ -472,7 +475,7 @@ export class SessionManager {
 
     // Function to add all files within a directory to fileYMap
     private async addAllFilesInDirectory(folderPath: string) {
-        const normalizedFolderPath = path.posix.normalize(folderPath);
+        const normalizedFolderPath = this.toPosixPath(folderPath);
 
         // Find all files in the created directory
         const files = await vscode.workspace.findFiles(
@@ -480,7 +483,7 @@ export class SessionManager {
         );
 
         for (const file of files) {
-            const normalizedFilePath = path.posix.normalize(file.fsPath);
+            const normalizedFilePath = this.toPosixPath(file.fsPath);
             const relativeFilePath =
                 this.getRelativeFilePath(normalizedFilePath);
 
@@ -506,7 +509,7 @@ export class SessionManager {
 
     // Function to remove all files within a directory from fileYMap
     private removeAllFilesInDirectory(folderName: string) {
-        const normalizedFolderName = path.posix.normalize(folderName);
+        const normalizedFolderName = this.toPosixPath(folderName);
         for (const key of Array.from(this.fileYMap.keys())) {
             if (key.startsWith(`${normalizedFolderName}/`)) {
                 this.fileYMap.delete(key);
@@ -559,8 +562,8 @@ export class SessionManager {
         oldRelativePath: string,
         newRelativePath: string
     ) {
-        const normalizedOldPath = path.posix.normalize(oldRelativePath);
-        const normalizedNewPath = path.posix.normalize(newRelativePath);
+        const normalizedOldPath = this.toPosixPath(oldRelativePath);
+        const normalizedNewPath = this.toPosixPath(newRelativePath);
 
         // Find all entries in fileYMap that start with the old folder path
         const keysToRename = Array.from(this.fileYMap.keys()).filter((key) =>
