@@ -63,22 +63,27 @@ Coducate includes the following default keybindings:
 
 ## Release Notes
 
+### 0.2.0
+
+-   The emulated terminal now uses WSL (Bash) for Windows users. This change was made to ensure that the terminal behaves consistently across different operating systems.
+-   Coducate now recommends to save the workspace as a workspace file before starting a session. This guarantees that multiple sessions on different VS Code windows do not conflict with each other.
+-   Notifications added to the web view to inform users about their write access status.
+
+### 0.1.0
+
+-   Added a command to change the web view theme.
+-   Task descriptions and learning goals are now optional when creating a session.
+-   Copy room ID from information message or status bar.
+-   Improved session organization with room ID stored in workspace-specific storage.
+
 ### 0.0.1
 
 -   Initial release of Coducate.
 -   Core features implemented:
     -   Start and end sessions.
-    -   Grant and revoke write access.
+    -   Grant and revoke write access to participants.
     -   Create and manage notes for copilot-like inline suggestions.
     -   Terminal and Explorer controls.
     -   Commands to adjust the web view UI of Coducate.
-
-### 0.1.0
-
--   Added command to change web view theme.
--   Made task descriptions optional when creating sessions.
--   Copy room ID from information message or status bar.
--   Room ID stored in workspace storage to avoid conflicts between workspaces.
--   Improved error handling and message consistency (error, warning, and information messages).
 
 ---
