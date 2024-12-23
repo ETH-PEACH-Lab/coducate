@@ -2,7 +2,7 @@
     "name": "coducate",
     "displayName": "Coducate",
     "description": "Facilitates Live Coding.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "publisher": "coducate",
     "icon": "public/coducate-logo-128.png",
     "galleryBanner.color": {
