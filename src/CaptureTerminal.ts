@@ -137,12 +137,14 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
             TERM: "xterm-256color",
         };
 
-        const shellCommand = os.platform() === "win32" ? "cmd.exe" : "bash";
-        const shellArgs = os.platform() === "win32" ? ["/c"] : [];
+        const isWindows = os.platform() === "win32";
+        const shellCommand = isWindows ? "wsl.exe" : "bash";
 
         try {
-            this.shellProcess = spawn(shellCommand, shellArgs, {
-                cwd: this.cwd,
+            const cwd = this.cwd;
+
+            this.shellProcess = spawn(shellCommand, [], {
+                cwd: cwd,
                 env: env,
                 stdio: ["pipe", "pipe", "pipe"],
             });
