@@ -60,7 +60,46 @@ export class DiffWatcher {
         this.observeYMapChanges();
     }
 
+    public getDiffFilesSet() {
+        return this.diffFilesSet;
+    }
+
+    private debounce(func: (...args: any[]) => void, delay: number) {
+        let timeout: NodeJS.Timeout;
+        return (...args: any[]) => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func(...args), delay);
+        };
+    }
+
+    private async revalidateDiffFiles() {
+        for (const relativePath of Array.from(this.diffFilesSet)) {
+            const document = await this.getDocument(relativePath);
+            const yText = this.fileYMap.get(relativePath);
+
+            if (document && yText) {
+                const fileContent = document.getText();
+                const yTextContent = yText.toString();
+
+                if (fileContent === yTextContent) {
+                    this.diffFilesSet.delete(relativePath);
+                }
+            } else {
+                // Remove files that are no longer valid
+                this.diffFilesSet.delete(relativePath);
+            }
+        }
+
+        this.updateDiffButtonVisibility();
+        this.saveDiffFiles();
+    }
+
     private observeYMapChanges() {
+        const debouncedValidation = this.debounce(
+            () => this.revalidateDiffFiles(),
+            500
+        );
+
         this.fileYMap.observeDeep(async (events) => {
             for (const event of events) {
                 if (event.target instanceof Y.Text) {
@@ -84,6 +123,9 @@ export class DiffWatcher {
 
                     this.updateDiffButtonVisibility();
                     this.saveDiffFiles();
+
+                    // Trigger debounced validation
+                    debouncedValidation();
                 }
             }
         });
