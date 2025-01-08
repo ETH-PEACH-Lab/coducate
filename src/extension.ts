@@ -1094,6 +1094,10 @@ function registerCommands(
                     );
 
                     if (confirmDelete === "Yes") {
+                        // Delete the stored notes for the session
+                        const notesKey = `storedNotes-${existingSessions[selectedSessionName].roomId}`;
+                        await context.globalState.update(notesKey, undefined);
+
                         // Delete the selected session
                         delete existingSessions[selectedSessionName];
                         await context.globalState.update(
