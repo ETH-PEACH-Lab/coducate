@@ -39,8 +39,7 @@ enum SessionType {
     RESTORED_SESSION = 3,
 }
 
-export function activate(context: vscode.ExtensionContext) {
-    // console.log("Coducate extension is now active.");
+export async function activate(context: vscode.ExtensionContext) {
     let sessionManager: SessionManager | undefined;
 
     // Create the status bar item
@@ -88,6 +87,68 @@ export function activate(context: vscode.ExtensionContext) {
             });
     }
 
+    // Restore the previously opened files (this is necessary as the creation of a new
+    // Coducate workspace opens a new window with the correct workspace configuration where the files are not
+    // automatically restored)
+    const tabGroupsState = context.globalState.get<
+        {
+            viewColumn: vscode.ViewColumn;
+            tabs: { label: string; isActive: boolean; uri: string }[];
+        }[]
+    >("coducate.tabGroupsState");
+
+    if (tabGroupsState) {
+        try {
+            // Restore tabs for each tab group
+            for (const group of tabGroupsState) {
+                let focusedTabUri: string | undefined;
+
+                for (const tab of group.tabs) {
+                    try {
+                        // Restore files
+                        const document =
+                            await vscode.workspace.openTextDocument(
+                                vscode.Uri.parse(tab.uri)
+                            );
+                        await vscode.window.showTextDocument(document, {
+                            viewColumn: group.viewColumn,
+                            preview: false,
+                            preserveFocus: !tab.isActive,
+                        });
+
+                        // Mark the active tab for later focus
+                        if (tab.isActive) {
+                            focusedTabUri = tab.uri;
+                        }
+                    } catch (error) {
+                        // Do not notify the user as this is not of critical importance
+                    }
+                }
+
+                // After all tabs in the group are opened, set focus to the active tab
+                if (focusedTabUri) {
+                    try {
+                        const focusedDocument =
+                            await vscode.workspace.openTextDocument(
+                                vscode.Uri.parse(focusedTabUri)
+                            );
+                        await vscode.window.showTextDocument(focusedDocument, {
+                            viewColumn: group.viewColumn,
+                            preview: false,
+                            preserveFocus: false,
+                        });
+                    } catch (error) {
+                        // Do not notify the user as this is not of critical importance
+                    }
+                }
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(
+                "An error occurred while restoring tabs. Check the logs for details."
+            );
+        }
+    }
+
     // Restore session if a roomId exists
     const roomId = context.workspaceState.get<string>(ROOM_ID_KEY);
     if (roomId) {
@@ -104,6 +165,14 @@ export function activate(context: vscode.ExtensionContext) {
         sessionManager,
         status,
     });
+
+    if (tabGroupsState) {
+        // Execute the Start Session command for the user as a new Coducate workspace has been created
+        vscode.commands.executeCommand("coducate.startSession");
+
+        // Clear the saved tab groups state
+        await context.globalState.update("coducate.tabGroupsState", undefined);
+    }
 }
 
 /**
@@ -277,7 +346,7 @@ function registerCommands(
 
                 const saveWorkspaceResponse =
                     await vscode.window.showWarningMessage(
-                        "It is highly recommended to save your current workspace as a workspace file. This guarantees that different Coducate sessions in multiple VS Code windows do not conflict. Additionally, if multiple root folders are added to the workspace, saving it prevents the need to manually restart the session. Would you like to save the current workspace?",
+                        "It is highly recommended to save your current workspace. This guarantees that different Coducate sessions in multiple VS Code windows do not conflict. Additionally, if multiple root folders are added to the workspace, saving it prevents the need to manually restart the session. Would you like to save the current workspace?",
                         "Yes",
                         "No"
                     );
@@ -285,11 +354,11 @@ function registerCommands(
                 if (saveWorkspaceResponse === "Yes") {
                     // Notify the user to execute the Start Session command again after saving the workspace
                     await vscode.window.showInformationMessage(
-                        "A new window will be opened with the correct workspace configuration already set up. Please restart the session in the new window. Click 'Ok' to confirm.",
+                        "A new window will be opened with the correct workspace configuration already set up. Click 'Ok' to confirm.",
                         "Ok"
                     );
 
-                    // Create a new workspace with the current folders
+                    // Create a new workspace with the current folders and files
                     if (workspaceFolders) {
                         const workspaceContent = {
                             folders: workspaceFolders.map((folder) => ({
@@ -299,26 +368,52 @@ function registerCommands(
                         };
 
                         try {
+                            // Capture all file tabs in tab groups
+                            const tabGroupsState =
+                                vscode.window.tabGroups.all.map((group) => ({
+                                    viewColumn: group.viewColumn,
+                                    tabs: group.tabs
+                                        .filter(
+                                            (tab) =>
+                                                tab.input instanceof
+                                                vscode.TabInputText
+                                        ) // Only capture files
+                                        .map((tab) => ({
+                                            label: tab.label,
+                                            isActive: tab.isActive,
+                                            uri: (
+                                                tab.input as vscode.TabInputText
+                                            ).uri.toString(),
+                                        })),
+                                }));
+
+                            // Save tab and terminal state in globalState
+                            await context.globalState.update(
+                                "coducate.tabGroupsState",
+                                tabGroupsState
+                            );
+
                             // Write the workspace configurations to a temporary file
                             const tempDir = os.tmpdir();
-                            const untitledWorkspacePath = path.join(
+                            const workspacePath = path.join(
                                 tempDir,
                                 `coducate-${Date.now()}.code-workspace`
                             );
 
                             await fs.writeFile(
-                                untitledWorkspacePath,
+                                workspacePath,
                                 JSON.stringify(workspaceContent, null, 2)
                             );
 
                             await vscode.commands.executeCommand(
                                 "vscode.openFolder",
-                                vscode.Uri.file(untitledWorkspacePath),
+                                vscode.Uri.file(workspacePath),
                                 true
                             );
 
+                            // This will be shown in the old window
                             await vscode.window.showWarningMessage(
-                                "Do NOT use Coducate in this window. A new window has been opened with the correct workspace configuration. Please restart the session in the new window. Coducate will automatically return to this window after the session has ended.",
+                                "Do NOT use Coducate in this window. A new window has been opened with the correct workspace configuration already set up. Coducate will automatically return to this window after the session has ended.",
                                 "Ok"
                             );
                             return;
@@ -490,7 +585,6 @@ function registerCommands(
                     try {
                         isRoomIdValid = !(await isRoomExisting(newRoomId));
                     } catch (error) {
-                        // console.log("Error generating room ID: " + error);
                         vscode.window.showErrorMessage(
                             "Error generating room ID: " +
                                 (error as Error).message
@@ -499,7 +593,7 @@ function registerCommands(
                     }
                 }
 
-                context.workspaceState.update(ROOM_ID_KEY, newRoomId);
+                await context.workspaceState.update(ROOM_ID_KEY, newRoomId);
 
                 // Store the mapping of session name to room ID and password
                 const existingSessions =
@@ -546,7 +640,10 @@ function registerCommands(
                         sessionManager.dispose();
                         sessionManager = undefined;
                         status.text = "$(sync-ignored) Coducate";
-                        context.workspaceState.update(ROOM_ID_KEY, undefined);
+                        await context.workspaceState.update(
+                            ROOM_ID_KEY,
+                            undefined
+                        );
 
                         return;
                     }
@@ -569,7 +666,10 @@ function registerCommands(
                         sessionManager.dispose();
                         sessionManager = undefined;
                         status.text = "$(sync-ignored) Coducate";
-                        context.workspaceState.update(ROOM_ID_KEY, undefined);
+                        await context.workspaceState.update(
+                            ROOM_ID_KEY,
+                            undefined
+                        );
 
                         return;
                     }
@@ -605,7 +705,7 @@ function registerCommands(
                             sessionManager.dispose();
                             sessionManager = undefined;
                             status.text = "$(sync-ignored) Coducate";
-                            context.workspaceState.update(
+                            await context.workspaceState.update(
                                 ROOM_ID_KEY,
                                 undefined
                             );
@@ -642,7 +742,7 @@ function registerCommands(
                                     sessionManager.dispose();
                                     sessionManager = undefined;
                                     status.text = "$(sync-ignored) Coducate";
-                                    context.workspaceState.update(
+                                    await context.workspaceState.update(
                                         ROOM_ID_KEY,
                                         undefined
                                     );
@@ -719,7 +819,7 @@ function registerCommands(
                     return;
                 }
 
-                context.workspaceState.update(ROOM_ID_KEY, roomId);
+                await context.workspaceState.update(ROOM_ID_KEY, roomId);
 
                 sessionManager = initializeSession(
                     context,
@@ -821,16 +921,19 @@ function registerCommands(
                 sessionManager.dispose();
                 sessionManager = undefined;
                 status.text = "$(sync-ignored) Coducate";
-                context.workspaceState.update(ROOM_ID_KEY, undefined);
+                await context.workspaceState.update(ROOM_ID_KEY, undefined);
 
                 vscode.window.showInformationMessage(
                     "Live Coding Session ended."
                 );
 
-                // Return if the current window uses an untitled workspace or no workspace
+                // If the current workspace is non-existent, untitled or not created by Coducate, do nothing
                 if (
                     !vscode.workspace.workspaceFile ||
-                    vscode.workspace.workspaceFile.scheme === "untitled"
+                    vscode.workspace.workspaceFile.scheme === "untitled" ||
+                    !/coducate-\d+\.code-workspace$/.test(
+                        vscode.workspace.workspaceFile.fsPath
+                    )
                 ) {
                     return;
                 }
@@ -2426,6 +2529,4 @@ function registerCommands(
     );
 }
 
-export function deactivate() {
-    // console.log("Coducate extension is now deactivated.");
-}
+export function deactivate() {}
