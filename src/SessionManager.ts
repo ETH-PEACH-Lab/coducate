@@ -204,8 +204,26 @@ export class SessionManager {
         });
 
         // Listen to file changes
-        vscode.workspace.onDidChangeTextDocument((event) => {
+        vscode.workspace.onDidChangeTextDocument(async (event) => {
             if (event.document === vscode.window.activeTextEditor?.document) {
+                const relativePath = this.getRelativeFilePath(
+                    event.document.fileName
+                );
+                if (!relativePath) {
+                    return; // Ignore files that cannot be resolved to a relative path
+                }
+
+                // Warn the instructor if the file has differences tracked in DiffWatcher
+                if (
+                    this.diffWatcher &&
+                    this.diffWatcher.getDiffFilesSet().has(relativePath)
+                ) {
+                    await vscode.window.showWarningMessage(
+                        `${relativePath} contains changes from clients. Please resolve these changes before editing the file.`,
+                        "Ok"
+                    );
+                }
+
                 this.applyIncrementalChanges(
                     event.document.fileName,
                     event.contentChanges
