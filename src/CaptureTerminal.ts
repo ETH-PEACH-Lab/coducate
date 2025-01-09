@@ -196,7 +196,7 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
         );
 
         // Request the terminal to open
-        vscode.commands.executeCommand("coducate.requestTerminalClose");
+        vscode.commands.executeCommand("coducate.closeTerminal");
     }
 
     private handleShellOutput(data: string) {

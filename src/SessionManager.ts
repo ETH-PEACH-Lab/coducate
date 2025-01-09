@@ -372,7 +372,7 @@ export class SessionManager {
                         // Send the instructor file name to the server
                         this.controlWebSocket.send(
                             JSON.stringify({
-                                type: "setInstructorFile",
+                                type: "set_instructor_file_request",
                                 payload: {
                                     roomId: this.roomId,
                                     instructorFile: relativeFilePath,
@@ -449,7 +449,7 @@ export class SessionManager {
             // Execute the command only once on the first trigger
             if (!this.hasExecutedOpenTerminal) {
                 // Request the terminal to open
-                vscode.commands.executeCommand("coducate.requestTerminalOpen");
+                vscode.commands.executeCommand("coducate.openTerminal");
                 this.hasExecutedOpenTerminal = true;
             }
         });
@@ -457,7 +457,7 @@ export class SessionManager {
         // Listen to notebook close events
         vscode.workspace.onDidCloseNotebookDocument(() => {
             // Request the terminal to close
-            vscode.commands.executeCommand("coducate.requestTerminalClose");
+            vscode.commands.executeCommand("coducate.closeTerminal");
             this.hasExecutedOpenTerminal = false;
         });
     }

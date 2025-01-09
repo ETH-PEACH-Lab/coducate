@@ -262,7 +262,7 @@ function initializeSession(
             try {
                 controlWebSocket.send(
                     JSON.stringify({
-                        type: "setInstructorFile",
+                        type: "set_instructor_file_request",
                         payload: {
                             roomId: roomId,
                             instructorFile: relativeFilePath,
@@ -285,7 +285,7 @@ function initializeSession(
                 try {
                     controlWebSocket.send(
                         JSON.stringify({
-                            type: "setInstructorFile",
+                            type: "set_instructor_file_request",
                             payload: {
                                 roomId: roomId,
                                 instructorFile: relativeFilePath,
@@ -883,7 +883,7 @@ function registerCommands(
                 try {
                     const { type, payload } = JSON.parse(message);
                     if (
-                        type === "sessionDataSetResponse" &&
+                        type === "set_session_data_response" &&
                         payload.roomId === sessionManager?.getRoomId()
                     ) {
                         resolve(true);
@@ -904,7 +904,7 @@ function registerCommands(
             // Send password to server
             controlWebSocket.send(
                 JSON.stringify({
-                    type: "setSessionData",
+                    type: "set_session_data_request",
                     payload: {
                         roomId,
                         password,
@@ -1225,7 +1225,7 @@ function registerCommands(
                                                         JSON.parse(message);
                                                     if (
                                                         type ===
-                                                            "accessGranted" &&
+                                                            "grant_access_response" &&
                                                         payload.simpleID ===
                                                             targetSimpleID &&
                                                         payload.roomId ===
@@ -1252,7 +1252,7 @@ function registerCommands(
 
                                             controlWebSocket.send(
                                                 JSON.stringify({
-                                                    type: "grantAccess",
+                                                    type: "grant_access_request",
                                                     payload: {
                                                         roomId,
                                                         targetSimpleID,
@@ -1340,7 +1340,8 @@ function registerCommands(
                                             const { type, payload } =
                                                 JSON.parse(message);
                                             if (
-                                                type === "accessGranted" &&
+                                                type ===
+                                                    "grant_access_response" &&
                                                 payload.roomId === roomId &&
                                                 Array.isArray(payload.simpleID)
                                             ) {
@@ -1365,7 +1366,7 @@ function registerCommands(
 
                                     controlWebSocket.send(
                                         JSON.stringify({
-                                            type: "grantAccess",
+                                            type: "grant_access_request",
                                             payload: {
                                                 roomId,
                                                 targetSimpleID: null,
@@ -1527,7 +1528,8 @@ function registerCommands(
                                             const { type, payload } =
                                                 JSON.parse(message);
                                             if (
-                                                type === "accessRevoked" &&
+                                                type ===
+                                                    "revoke_access_response" &&
                                                 payload.simpleID ===
                                                     finalSimpleID &&
                                                 payload.roomId === roomId
@@ -1551,7 +1553,7 @@ function registerCommands(
 
                                     controlWebSocket.send(
                                         JSON.stringify({
-                                            type: "revokeAccess",
+                                            type: "revoke_access_request",
                                             payload: {
                                                 roomId,
                                                 targetSimpleID: finalSimpleID,
@@ -1620,7 +1622,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "accessRevoked" &&
+                                        type === "revoke_access_response" &&
                                         payload.roomId === roomId &&
                                         payload.simpleID === null
                                     ) {
@@ -1641,7 +1643,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "revokeAccess",
+                                    type: "revoke_access_request",
                                     payload: { roomId, targetSimpleID: null },
                                 })
                             );
@@ -1736,13 +1738,13 @@ function registerCommands(
             vscode.tasks.executeTask(task);
 
             // Request the terminal to open
-            vscode.commands.executeCommand("coducate.requestTerminalOpen");
+            vscode.commands.executeCommand("coducate.openTerminal");
         }
     );
 
     // Command to request terminal open
     const requestTerminalOpenCommand = vscode.commands.registerCommand(
-        "coducate.requestTerminalOpen",
+        "coducate.openTerminal",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -1763,7 +1765,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "terminalOpened" &&
+                                        type === "open_terminal_response" &&
                                         payload.roomId ===
                                             sessionManager?.getRoomId()
                                     ) {
@@ -1784,7 +1786,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "requestTerminalOpen",
+                                    type: "open_terminal_request",
                                     payload: {
                                         roomId: sessionManager?.getRoomId(),
                                     },
@@ -1830,7 +1832,7 @@ function registerCommands(
 
     // Command to request terminal close
     const requestTerminalCloseCommand = vscode.commands.registerCommand(
-        "coducate.requestTerminalClose",
+        "coducate.closeTerminal",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -1851,7 +1853,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "terminalClosed" &&
+                                        type === "close_terminal_response" &&
                                         payload.roomId ===
                                             sessionManager?.getRoomId()
                                     ) {
@@ -1872,7 +1874,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "requestTerminalClose",
+                                    type: "close_terminal_request",
                                     payload: {
                                         roomId: sessionManager?.getRoomId(),
                                     },
@@ -1920,7 +1922,7 @@ function registerCommands(
 
     // Command to request explorer open
     const requestExplorerOpen = vscode.commands.registerCommand(
-        "coducate.requestExplorerOpen",
+        "coducate.openExplorer",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -1941,7 +1943,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "explorerOpened" &&
+                                        type === "open_explorer_response" &&
                                         payload.roomId ===
                                             sessionManager?.getRoomId()
                                     ) {
@@ -1962,7 +1964,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "requestExplorerOpen",
+                                    type: "open_explorer_request",
                                     payload: {
                                         roomId: sessionManager?.getRoomId(),
                                     },
@@ -2008,7 +2010,7 @@ function registerCommands(
 
     // Command to request terminal close
     const requestExplorerClose = vscode.commands.registerCommand(
-        "coducate.requestExplorerClose",
+        "coducate.closeExplorer",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -2029,7 +2031,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "explorerClosed" &&
+                                        type === "close_explorer_response" &&
                                         payload.roomId ===
                                             sessionManager?.getRoomId()
                                     ) {
@@ -2050,7 +2052,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "requestExplorerClose",
+                                    type: "close_explorer_request",
                                     payload: {
                                         roomId: sessionManager?.getRoomId(),
                                     },
@@ -2097,7 +2099,7 @@ function registerCommands(
     );
 
     const adjustFontSizeCommand = vscode.commands.registerCommand(
-        "coducate.adjustFontSize",
+        "coducate.changeFontSize",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -2143,7 +2145,8 @@ function registerCommands(
                                         const { type, payload } =
                                             JSON.parse(message);
                                         if (
-                                            type === "fontSizeChanged" &&
+                                            type ===
+                                                "change_font_size_response" &&
                                             payload.roomId ===
                                                 sessionManager?.getRoomId()
                                         ) {
@@ -2166,7 +2169,7 @@ function registerCommands(
 
                                 controlWebSocket.send(
                                     JSON.stringify({
-                                        type: "requestFontSizeChange",
+                                        type: "change_font_size_request",
                                         payload: {
                                             roomId: sessionManager?.getRoomId(),
                                             increase:
@@ -2255,7 +2258,7 @@ function registerCommands(
                                     const { type, payload } =
                                         JSON.parse(message);
                                     if (
-                                        type === "themeChanged" &&
+                                        type === "change_theme_response" &&
                                         payload.changedTheme ===
                                             selectedTheme &&
                                         payload.roomId ===
@@ -2278,7 +2281,7 @@ function registerCommands(
 
                             controlWebSocket.send(
                                 JSON.stringify({
-                                    type: "requestThemeChange",
+                                    type: "change_theme_request",
                                     payload: {
                                         changedTheme: selectedTheme,
                                         roomId: sessionManager?.getRoomId(),
@@ -2452,7 +2455,7 @@ function registerCommands(
     );
 
     const removeNoteCommand = vscode.commands.registerCommand(
-        "coducate.removeNote",
+        "coducate.removeNotes",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(

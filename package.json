@@ -46,23 +46,23 @@
                 "title": "Coducate: Emulate Terminal"
             },
             {
-                "command": "coducate.requestTerminalOpen",
+                "command": "coducate.openTerminal",
                 "title": "Coducate: Open Terminal"
             },
             {
-                "command": "coducate.requestTerminalClose",
+                "command": "coducate.closeTerminal",
                 "title": "Coducate: Close Terminal"
             },
             {
-                "command": "coducate.requestExplorerOpen",
+                "command": "coducate.openExplorer",
                 "title": "Coducate: Open Explorer"
             },
             {
-                "command": "coducate.requestExplorerClose",
+                "command": "coducate.closeExplorer",
                 "title": "Coducate: Close Explorer"
             },
             {
-                "command": "coducate.adjustFontSize",
+                "command": "coducate.changeFontSize",
                 "title": "Coducate: Change Font Size"
             },
             {
@@ -74,7 +74,7 @@
                 "title": "Coducate: Create Note"
             },
             {
-                "command": "coducate.removeNote",
+                "command": "coducate.removeNotes",
                 "title": "Coducate: Remove Notes"
             },
             {
