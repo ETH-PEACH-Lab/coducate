@@ -10,6 +10,13 @@ import { DiffWatcher } from "./DiffWatcher";
 import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
 import { InlineCompletionProvider } from "./InlineCompletionProvider";
 
+// Extend WebSocket interface to include custom properties
+interface CustomWebSocket extends WebSocket {
+    isAlive?: boolean;
+    pingTimeout?: NodeJS.Timeout;
+    roomId?: string;
+}
+
 const EXCLUDED_DIRECTORIES = new Set([
     "node_modules",
     ".git",
@@ -25,7 +32,10 @@ const EXCLUDED_DIRECTORIES = new Set([
 
 export class SessionManager {
     private provider: WebsocketProvider;
-    private controlWebSocket: WebSocket;
+    private controlWebSocket: CustomWebSocket | null = null;
+    private reconnectAttempts: number = 0;
+    private maxBackoffTime: number = 2500; // Maximum backoff time in milliseconds
+    private shouldConnect: boolean = true; // Flag to manage connection state
     private roomId: string;
     private yDoc: Y.Doc;
     private awareness: Awareness;
@@ -48,7 +58,11 @@ export class SessionManager {
         this.provider = new WebsocketProvider(urlYjs, roomId, this.yDoc, {
             WebSocketPolyfill: require("ws"),
         });
-        this.controlWebSocket = new WebSocket(urlControlWebsocket);
+        this.controlWebSocket = new WebSocket(
+            urlControlWebsocket
+        ) as CustomWebSocket;
+
+        this.initializeControlWebSocket();
 
         // Initialize awareness for the provider
         this.awareness = this.provider.awareness;
@@ -150,6 +164,66 @@ export class SessionManager {
         }
 
         return normalizedFilePath; // Return absolute path if file is not within any workspace folder
+    }
+
+    private initializeControlWebSocket() {
+        if (!this.shouldConnect) {
+            return;
+        }
+
+        const url = `ws://localhost:3000/control?roomId=${this.roomId}`;
+        this.controlWebSocket = new WebSocket(url) as CustomWebSocket;
+
+        const ws = this.controlWebSocket;
+
+        ws.onopen = () => {
+            this.reconnectAttempts = 0; // Reset reconnect attempts
+            if (ws.pingTimeout) {
+                clearTimeout(ws.pingTimeout);
+            }
+        };
+
+        ws.onclose = () => {
+            if (ws.pingTimeout) {
+                clearTimeout(ws.pingTimeout);
+            }
+            this.scheduleReconnect();
+        };
+
+        ws.onerror = (error) => {
+            ws.close();
+            this.scheduleReconnect();
+        };
+
+        // Heartbeat handling
+        const heartbeat = () => {
+            if (ws.pingTimeout) {
+                clearTimeout(ws.pingTimeout);
+            }
+
+            // Set a timeout to terminate the connection if no ping is received
+            ws.pingTimeout = setTimeout(() => {
+                ws.terminate();
+            }, 30000 + 1000); // 30 seconds (ping interval) + 1 second buffer
+        };
+
+        this.controlWebSocket.on("ping", heartbeat);
+    }
+
+    private scheduleReconnect() {
+        if (!this.shouldConnect) {
+            return;
+        }
+
+        const backoffTime = Math.min(
+            Math.pow(2, this.reconnectAttempts) * 100,
+            this.maxBackoffTime
+        );
+
+        setTimeout(() => {
+            this.reconnectAttempts++;
+            this.initializeControlWebSocket();
+        }, backoffTime);
     }
 
     private setupVSCodeListeners() {
@@ -621,13 +695,45 @@ export class SessionManager {
     }
 
     public dispose() {
-        this.provider.disconnect();
-        this.provider.destroy();
-        this.yDoc.destroy();
-        this.awareness.setLocalState(null);
-        this.controlWebSocket.close();
-        this.diffWatcher.dispose();
-        this.disposables.forEach((disposable) => disposable.dispose());
-        this.disposables = [];
+        // Prevent WebSocket reconnections
+        this.shouldConnect = false;
+
+        // Disconnect and clean up the provider
+        if (this.provider) {
+            this.provider.disconnect();
+            this.provider.destroy();
+        }
+
+        // Destroy the Yjs document
+        if (this.yDoc) {
+            this.yDoc.destroy();
+        }
+
+        // Reset awareness state
+        if (this.awareness) {
+            this.awareness.setLocalState(null);
+        }
+
+        // Close the control WebSocket safely
+        if (this.controlWebSocket) {
+            if (
+                this.controlWebSocket.readyState === WebSocket.OPEN ||
+                this.controlWebSocket.readyState === WebSocket.CONNECTING
+            ) {
+                this.controlWebSocket.close();
+            }
+            this.controlWebSocket = null;
+        }
+
+        // Dispose the diff watcher
+        if (this.diffWatcher) {
+            this.diffWatcher.dispose();
+        }
+
+        // Dispose all registered disposables
+        if (this.disposables.length > 0) {
+            this.disposables.forEach((disposable) => disposable.dispose());
+            this.disposables = [];
+        }
     }
 }

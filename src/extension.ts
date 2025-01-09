@@ -257,7 +257,7 @@ function initializeSession(
 
     // Send the currently active file to the server if available
     const controlWebSocket = sessionManager.getControlWebSocket();
-    if (controlWebSocket.readyState === WebSocket.OPEN) {
+    if (controlWebSocket && controlWebSocket.readyState === WebSocket.OPEN) {
         if (relativeFilePath) {
             try {
                 controlWebSocket.send(
@@ -276,7 +276,10 @@ function initializeSession(
                 );
             }
         }
-    } else if (controlWebSocket.readyState === WebSocket.CONNECTING) {
+    } else if (
+        controlWebSocket &&
+        controlWebSocket.readyState === WebSocket.CONNECTING
+    ) {
         controlWebSocket.addEventListener("open", async () => {
             if (relativeFilePath) {
                 try {
@@ -679,7 +682,10 @@ function registerCommands(
                     const controlWebSocket =
                         sessionManager.getControlWebSocket();
 
-                    if (controlWebSocket.readyState === WebSocket.OPEN) {
+                    if (
+                        controlWebSocket &&
+                        controlWebSocket.readyState === WebSocket.OPEN
+                    ) {
                         try {
                             await sendSessionData(
                                 controlWebSocket,
@@ -713,6 +719,7 @@ function registerCommands(
                             return;
                         }
                     } else if (
+                        controlWebSocket &&
                         controlWebSocket.readyState === WebSocket.CONNECTING
                     ) {
                         controlWebSocket.addEventListener("open", async () => {
