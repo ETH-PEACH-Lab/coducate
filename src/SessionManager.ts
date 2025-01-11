@@ -33,6 +33,7 @@ const EXCLUDED_DIRECTORIES = new Set([
 export class SessionManager {
     private provider: WebsocketProvider;
     private controlWebSocket: CustomWebSocket | null = null;
+    private urlControlWebsocket: string;
     private reconnectAttempts: number = 0;
     private maxBackoffTime: number = 2500; // Maximum backoff time in milliseconds
     private shouldConnect: boolean = true; // Flag to manage connection state
@@ -58,10 +59,9 @@ export class SessionManager {
         this.provider = new WebsocketProvider(urlYjs, roomId, this.yDoc, {
             WebSocketPolyfill: require("ws"),
         });
-        this.controlWebSocket = new WebSocket(
-            urlControlWebsocket
-        ) as CustomWebSocket;
 
+        // Initialize the control WebSocket
+        this.urlControlWebsocket = urlControlWebsocket;
         this.initializeControlWebSocket();
 
         // Initialize awareness for the provider
@@ -171,8 +171,9 @@ export class SessionManager {
             return;
         }
 
-        const url = `ws://localhost:3000/control?roomId=${this.roomId}`;
-        this.controlWebSocket = new WebSocket(url) as CustomWebSocket;
+        this.controlWebSocket = new WebSocket(
+            this.urlControlWebsocket
+        ) as CustomWebSocket;
 
         const ws = this.controlWebSocket;
 
