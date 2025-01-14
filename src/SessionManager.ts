@@ -60,6 +60,10 @@ export class SessionManager {
             WebSocketPolyfill: require("ws"),
         });
 
+        // Bind methods
+        this.toPosixPath = this.toPosixPath.bind(this);
+        this.getRelativeFilePath = this.getRelativeFilePath.bind(this);
+
         // Initialize the control WebSocket
         this.urlControlWebsocket = urlControlWebsocket;
         this.initializeControlWebSocket();
