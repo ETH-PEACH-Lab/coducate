@@ -11,6 +11,7 @@ export class DiffWatcher {
     private roomId: string;
 
     private disposables: vscode.Disposable[] = [];
+    private codeLensDisposables: Map<string, vscode.Disposable> = new Map();
 
     constructor(
         fileYMap: Y.Map<Y.Text>,
@@ -33,6 +34,9 @@ export class DiffWatcher {
 
         // Load persisted files with differences
         this.loadDiffFiles();
+
+        // Listen for document close events of diff editors to revalidate diff files
+        this.initializeCloseDocumentListener();
 
         // Register the commands
         const showDiffFilesCommand = vscode.commands.registerCommand(
@@ -60,6 +64,33 @@ export class DiffWatcher {
         this.observeYMapChanges();
     }
 
+    // Listen for document close events of diff editors to revalidate diff files
+    // This is needed, as diff editor might still be open but the contents are the same
+    private initializeCloseDocumentListener() {
+        const disposable = vscode.workspace.onDidCloseTextDocument(
+            async (closedDocument) => {
+                const closedUri = closedDocument.uri.toString();
+                for (const [relativePath, diffDoc] of this.openDiffEditors) {
+                    if (diffDoc.uri.toString() === closedUri) {
+                        const document = await this.getDocument(relativePath);
+                        const yText = this.fileYMap.get(relativePath);
+                        if (
+                            document &&
+                            yText &&
+                            document.getText() === yText.toString()
+                        ) {
+                            this.removeDocumentFromTracking(relativePath);
+                        }
+                        this.revalidateDiffFiles();
+                        break;
+                    }
+                }
+            }
+        );
+        this.disposables.push(disposable);
+        this.context.subscriptions.push(disposable);
+    }
+
     public getDiffFilesSet() {
         return this.diffFilesSet;
     }
@@ -80,13 +111,32 @@ export class DiffWatcher {
             if (document && yText) {
                 const fileContent = document.getText();
                 const yTextContent = yText.toString();
+                const diffDoc = this.openDiffEditors.get(relativePath);
 
-                if (fileContent === yTextContent) {
+                if (fileContent === yTextContent && !diffDoc) {
+                    this.diffFilesSet.delete(relativePath); // No diff, diff editor was never opened
+                    await this.updateReadonlyInclude(
+                        document.uri.fsPath,
+                        false
+                    );
+                } else if (
+                    fileContent === yTextContent &&
+                    diffDoc &&
+                    !vscode.workspace.textDocuments.includes(diffDoc) // No diff, diff editor closed
+                ) {
                     this.diffFilesSet.delete(relativePath);
+                    await this.updateReadonlyInclude(
+                        document.uri.fsPath,
+                        false
+                    );
                 }
             } else {
                 // Remove files that are no longer valid
                 this.diffFilesSet.delete(relativePath);
+                await this.updateReadonlyInclude(
+                    document?.uri.fsPath || "",
+                    false
+                );
             }
         }
 
@@ -115,11 +165,17 @@ export class DiffWatcher {
                     const yTextContent = yText.toString();
 
                     if (fileContent !== yTextContent) {
+                        // Add the file to the diff set
                         this.diffFilesSet.add(relativePath);
-                        this.refreshOpenDiffEditor(relativePath);
-                    } else {
-                        this.diffFilesSet.delete(relativePath);
+
+                        // Update workspace settings
+                        await this.updateReadonlyInclude(
+                            document.uri.fsPath,
+                            true
+                        );
                     }
+
+                    this.refreshOpenDiffEditor(relativePath);
 
                     this.updateDiffButtonVisibility();
                     this.saveDiffFiles();
@@ -129,6 +185,39 @@ export class DiffWatcher {
                 }
             }
         });
+    }
+
+    private async updateReadonlyInclude(
+        absolutePath: string,
+        readonlyFlag: boolean
+    ) {
+        const config = vscode.workspace.getConfiguration();
+        const readonlyInclude =
+            config.get<Record<string, boolean>>("files.readonlyInclude") || {};
+
+        // Clone the object to ensure it's a plain JavaScript object
+        const updatedReadonlyInclude = { ...readonlyInclude };
+
+        if (readonlyFlag) {
+            // Add or mark the file as read-only if not already present
+            if (!updatedReadonlyInclude[absolutePath]) {
+                updatedReadonlyInclude[absolutePath] = true;
+            }
+        } else {
+            // Remove the file from the read-only list if present
+            if (updatedReadonlyInclude[absolutePath]) {
+                delete updatedReadonlyInclude[absolutePath];
+            }
+        }
+
+        console.log("Read-only: ", updatedReadonlyInclude);
+
+        // Update the workspace settings with the cloned object
+        await config.update(
+            "files.readonlyInclude",
+            updatedReadonlyInclude,
+            vscode.ConfigurationTarget.Workspace
+        );
     }
 
     private async showDiffFiles() {
@@ -166,10 +255,15 @@ export class DiffWatcher {
 
         // Create or reuse a temporary document with the Y.Text content
         let yTextDocument = this.openDiffEditors.get(relativePath);
-        if (!yTextDocument) {
+        if (
+            !yTextDocument ||
+            !vscode.workspace.textDocuments.includes(yTextDocument)
+        ) {
             yTextDocument = await vscode.workspace.openTextDocument({
                 content: yTextContent,
             });
+
+            this.updateReadonlyInclude(yTextDocument.uri.fsPath, true);
 
             // Track this open diff editor
             this.openDiffEditors.set(relativePath, yTextDocument);
@@ -198,16 +292,12 @@ export class DiffWatcher {
     private addCodeLensToDiffEditor(relativePath: string) {
         const diffDoc = this.openDiffEditors.get(relativePath);
         if (!diffDoc) {
-            // console.error(
-            //     `No open modified document found for ${relativePath}`
-            // );
             return;
         }
 
-        // Check if CodeLens is already added for this document
         const docUriString = diffDoc.uri.toString();
         if (this.registeredCodeLensDocs.has(docUriString)) {
-            return;
+            this.removeCodeLensForDocument(docUriString);
         }
 
         const provider: vscode.CodeLensProvider = {
@@ -238,6 +328,9 @@ export class DiffWatcher {
             provider
         );
 
+        // Track the disposable to remove the CodeLens provider
+        this.codeLensDisposables.set(docUriString, providerDisposable);
+
         // Mark the document as registered
         this.registeredCodeLensDocs.add(docUriString);
 
@@ -245,10 +338,26 @@ export class DiffWatcher {
         this.context.subscriptions.push(providerDisposable);
     }
 
+    private removeCodeLensForDocument(docUriString: string) {
+        // Remove from the registered CodeLens set
+        this.registeredCodeLensDocs.delete(docUriString);
+
+        // Remove the CodeLens provider
+        const disposable = this.codeLensDisposables.get(docUriString);
+        if (disposable) {
+            disposable.dispose();
+            this.codeLensDisposables.delete(docUriString);
+        }
+    }
+
     private async removeDocumentFromTracking(relativePath: string) {
         const diffDoc = this.openDiffEditors.get(relativePath);
         if (diffDoc) {
             this.registeredCodeLensDocs.delete(diffDoc.uri.toString());
+            await this.updateReadonlyInclude(
+                this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
+                false
+            );
             this.openDiffEditors.delete(relativePath);
         }
     }
@@ -257,7 +366,11 @@ export class DiffWatcher {
         const yText = this.fileYMap.get(relativePath);
         const yTextDocument = this.openDiffEditors.get(relativePath);
 
-        if (yText && yTextDocument) {
+        if (
+            yText &&
+            yTextDocument &&
+            vscode.workspace.textDocuments.includes(yTextDocument)
+        ) {
             const yTextContent = yText.toString();
             const edit = new vscode.WorkspaceEdit();
             edit.replace(
@@ -275,15 +388,14 @@ export class DiffWatcher {
             return;
         }
 
-        const fileUri = await this.getFileUri(relativePath);
-        if (!fileUri) {
+        const document = await this.getDocument(relativePath);
+        if (!document) {
             return;
         }
 
-        const document = await vscode.workspace.openTextDocument(fileUri);
         const edit = new vscode.WorkspaceEdit();
         edit.replace(
-            fileUri,
+            document.uri,
             new vscode.Range(0, 0, document.lineCount, 0),
             yText.toString()
         );
@@ -294,6 +406,13 @@ export class DiffWatcher {
 
         vscode.window.showInformationMessage(
             `Accepted changes for ${relativePath}`
+        );
+
+        // Update workspace settings
+        await this.updateReadonlyInclude(document.uri.fsPath, false);
+        await this.updateReadonlyInclude(
+            this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
+            false
         );
 
         // Remove the file from the diff set and save state
@@ -325,6 +444,13 @@ export class DiffWatcher {
 
         vscode.window.showInformationMessage(
             `Rejected changes for ${relativePath}`
+        );
+
+        // Update workspace settings
+        await this.updateReadonlyInclude(document.uri.fsPath, false);
+        await this.updateReadonlyInclude(
+            this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
+            false
         );
 
         // Remove the file from the diff set and save state
@@ -359,10 +485,16 @@ export class DiffWatcher {
     }
 
     // Load the set of files with differences from workspaceState, scoped by roomId
-    private loadDiffFiles() {
+    private async loadDiffFiles() {
         const key = `diffFilesSet-${this.roomId}`;
         const savedFiles = this.context.workspaceState.get<string[]>(key, []);
         this.diffFilesSet = new Set(savedFiles);
+        for (const relativePath of savedFiles) {
+            await this.updateReadonlyInclude(
+                (await this.getFileUri(relativePath))?.fsPath || "",
+                true
+            );
+        }
         this.updateDiffButtonVisibility();
     }
 
@@ -377,7 +509,6 @@ export class DiffWatcher {
         try {
             return await vscode.workspace.openTextDocument(fileUri);
         } catch (error) {
-            // console.error("Error opening document:", error);
             return null;
         }
     }
