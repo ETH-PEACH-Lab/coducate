@@ -7,7 +7,7 @@
     "icon": "public/coducate-logo-128.png",
     "galleryBanner": {
         "color": "#1e1e1e",
-        "theme": "light"
+        "theme": "dark"
     },
     "author": {
         "name": "Lukas Mast",
