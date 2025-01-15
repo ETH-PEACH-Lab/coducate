@@ -393,6 +393,13 @@ export class DiffWatcher {
             return;
         }
 
+        // Update workspace settings
+        await this.updateReadonlyInclude(document.uri.fsPath, false);
+        await this.updateReadonlyInclude(
+            this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
+            false
+        );
+
         const edit = new vscode.WorkspaceEdit();
         edit.replace(
             document.uri,
@@ -406,13 +413,6 @@ export class DiffWatcher {
 
         vscode.window.showInformationMessage(
             `Accepted changes for ${relativePath}`
-        );
-
-        // Update workspace settings
-        await this.updateReadonlyInclude(document.uri.fsPath, false);
-        await this.updateReadonlyInclude(
-            this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
-            false
         );
 
         // Remove the file from the diff set and save state
@@ -439,18 +439,18 @@ export class DiffWatcher {
             return;
         }
 
-        yText.delete(0, yText.length);
-        yText.insert(0, document.getText());
-
-        vscode.window.showInformationMessage(
-            `Rejected changes for ${relativePath}`
-        );
-
         // Update workspace settings
         await this.updateReadonlyInclude(document.uri.fsPath, false);
         await this.updateReadonlyInclude(
             this.openDiffEditors.get(relativePath)?.uri.fsPath || "",
             false
+        );
+
+        yText.delete(0, yText.length);
+        yText.insert(0, document.getText());
+
+        vscode.window.showInformationMessage(
+            `Rejected changes for ${relativePath}`
         );
 
         // Remove the file from the diff set and save state
