@@ -1,6 +1,19 @@
 # Change Log
 
-All notable changes to the "Coducate" extension will be documented in this file.
+All notable changes to the **Coducate** extension will be documented in this file.
+
+## [0.3.0] - 2025-01-15
+
+### Changed
+
+-   Added reconnection logic for WebSockets to improve connection stability. This ensures the connection is automatically re-established in scenarios such as networking issues or standby mode.
+-   Files containing participant changes are now set to read-only. If the instructor disables read-only mode and attempts to edit these files, a warning is displayed.
+
+### Fixed
+
+-   When Coducate creates a workspace for the user while creating a new session or joining an existing session, it now restores the open files in the new workspace window.
+-   Ensured notes are automatically deleted from VS Code's global state when the corresponding room is removed.
+-   Fixed a bug where the diff view failed to update if modified files became identical.
 
 ## [0.2.0] - 2024-12-23
 
@@ -10,7 +23,7 @@ All notable changes to the "Coducate" extension will be documented in this file.
 
 ### Changed
 
--   The emulated terminal now uses WSL (Bash) for Windows users. This change was made to ensure that the terminal behaves consistently across different operating systems.
+-   The pseudo-terminal now uses WSL (Bash) for Windows users. This change was made to ensure that the terminal behaves consistently across different operating systems.
 -   Coducate now recommends to save the workspace as a workspace file before starting a session. This guarantees that multiple sessions on different VS Code windows do not conflict with each other.
 
 ### Fixed
