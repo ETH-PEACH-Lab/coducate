@@ -2,7 +2,7 @@
     "name": "coducate",
     "displayName": "Coducate",
     "description": "A VS Code extension to Streamline Instructor-Led Live Coding",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "publisher": "coducate",
     "icon": "public/coducate-logo-128.png",
     "galleryBanner": {
