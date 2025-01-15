@@ -1,14 +1,19 @@
 {
     "name": "coducate",
     "displayName": "Coducate",
-    "description": "Facilitates Live Coding.",
+    "description": "A VS Code extension to Streamline Instructor-Led Live Coding",
     "version": "0.2.0",
     "publisher": "coducate",
     "icon": "public/coducate-logo-128.png",
-    "galleryBanner.color": {
+    "galleryBanner": {
         "color": "#1e1e1e",
-        "theme": "dark"
+        "theme": "light"
     },
+    "author": {
+        "name": "Lukas Mast",
+        "email": "lukasmast07@gmail.com"
+    },
+    "homepage": "https://delta.peachhub-cntr1.inf.ethz.ch",
     "engines": {
         "vscode": "^1.95.0"
     },
