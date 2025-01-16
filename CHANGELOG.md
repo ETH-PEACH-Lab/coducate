@@ -1,6 +1,19 @@
 # Change Log
 
-All notable changes to the **Coducate** extension will be documented in this file.
+## [0.3.1] - 2025-01-16
+
+### Added
+
+-   Added full-resolution logo for improved visual quality in the VS Code marketplace.
+
+### Changed
+
+-   Updated information messages for consistency.
+
+### Removed
+
+-   Deleted outdated low-resolution logo.
+-   Cleaned up unused code, including commented-out sections and unnecessary console logs.
 
 ## [0.3.0] - 2025-01-15
 
