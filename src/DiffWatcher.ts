@@ -210,8 +210,6 @@ export class DiffWatcher {
             }
         }
 
-        console.log("Read-only: ", updatedReadonlyInclude);
-
         // Update the workspace settings with the cloned object
         await config.update(
             "files.readonlyInclude",
