@@ -250,9 +250,6 @@ export class SessionManager {
                     );
                 } else if (fileStat.type === vscode.FileType.Directory) {
                     // Rename folder and all files within it
-                    // console.log(
-                    //     `Folder renamed: ${oldRelativePath} -> ${newRelativePath}`
-                    // );
                     await this.renameAllFilesInDirectory(
                         oldRelativePath,
                         newRelativePath
@@ -266,7 +263,6 @@ export class SessionManager {
             // Handle added workspace folders
             for (const addedFolder of event.added) {
                 const folderPath = addedFolder.uri.fsPath;
-                // console.log("Workspace folder added: " + folderPath);
 
                 // Add all files in the new folder to fileYMap
                 await this.addAllFilesInDirectory(folderPath);
@@ -274,9 +270,6 @@ export class SessionManager {
 
             // Handle removed workspace folders
             for (const removedFolder of event.removed) {
-                // const folderPath = removedFolder.uri.fsPath;
-                // console.log("Workspace folder removed: " + folderPath);
-
                 // Remove all files in the folder from fileYMap
                 this.removeAllFilesInDirectory(removedFolder.name);
             }
@@ -384,12 +377,7 @@ export class SessionManager {
                                 },
                             })
                         );
-                        // console.log(
-                        //     `Instructor file sent: ${relativeFilePath}`
-                        // );
-                    } catch (error) {
-                        // console.error("Error sending instructor file:", error);
-                    }
+                    } catch (error) {}
                 }
             }
         });
@@ -407,7 +395,6 @@ export class SessionManager {
                     await this.addFileToYMap(filePath, relativeFilePath);
                 } else if (fileStat.type === vscode.FileType.Directory) {
                     // Folder detected - add all files within this folder to fileYMap
-                    // console.log(`Folder created: ${relativeFilePath}`);
                     await this.addAllFilesInDirectory(filePath);
                 }
             }
@@ -426,22 +413,15 @@ export class SessionManager {
 
                 if (isFolder) {
                     // If it's a folder, delete all entries within that path
-                    // console.log(`Folder deleted: ${relativeFilePath}`);
                     for (const key of Array.from(this.fileYMap.keys())) {
                         if (key.startsWith(relativeFilePath + path.posix.sep)) {
                             this.fileYMap.delete(key);
-                            // console.log(
-                            //     `File deleted from folder in fileYMap: ${key}`
-                            // );
                         }
                     }
                 } else {
                     // If it's a single file, delete only that specific entry
                     if (this.fileYMap.has(relativeFilePath)) {
                         this.fileYMap.delete(relativeFilePath);
-                        // console.log(
-                        //     `File deleted from fileYMap: ${relativeFilePath}`
-                        // );
                     }
                 }
             }
@@ -541,6 +521,7 @@ export class SessionManager {
         }
     }
 
+    // Function to add an output to fileYMap
     public addOutputToYMap(outputFilePath: string, content: string) {
         const yText = new Y.Text();
         yText.insert(0, content);
@@ -560,13 +541,7 @@ export class SessionManager {
                 );
                 const content = document.getText();
                 yText.insert(0, content);
-
-                // console.log(`File added to fileYMap: ${relativeFilePath}`);
-            } catch (error) {
-                // console.log(
-                //     `Error opening file: ${relativeFilePath}. Probably binary.`
-                // );
-            }
+            } catch (error) {}
         }
     }
 
@@ -610,7 +585,6 @@ export class SessionManager {
         for (const key of Array.from(this.fileYMap.keys())) {
             if (key.startsWith(`${normalizedFolderName}/`)) {
                 this.fileYMap.delete(key);
-                // console.log(`File removed from fileYMap: ${key}`);
             }
         }
     }
@@ -638,19 +612,7 @@ export class SessionManager {
                 // Remove the old entry and add the new one
                 this.fileYMap.delete(oldRelativePath);
                 this.fileYMap.set(newRelativePath, newYText);
-
-                // console.log(
-                //     `Renamed: ${oldRelativePath} -> ${newRelativePath}`
-                // );
-            } else {
-                // console.log(
-                //     `Rename error: ${newRelativePath} not found in fileYMap.`
-                // );
             }
-        } else {
-            // console.log(
-            //     `Rename error: ${oldRelativePath} not found in fileYMap.`
-            // );
         }
     }
 
@@ -674,6 +636,7 @@ export class SessionManager {
         }
     }
 
+    // Function to apply incremental changes to Y.Text objects
     private applyIncrementalChanges(
         fileName: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
