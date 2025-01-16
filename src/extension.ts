@@ -208,7 +208,7 @@ function initializeSession(
                 if (selection === "Copy Room ID") {
                     vscode.env.clipboard.writeText(roomId).then(() => {
                         vscode.window.showInformationMessage(
-                            "Room ID copied to clipboard!"
+                            "Room ID copied to clipboard."
                         );
                     });
                 }
