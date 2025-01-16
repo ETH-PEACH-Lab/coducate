@@ -170,7 +170,6 @@ export class InlineCompletionProvider
 
             return suggestion;
         } catch (err) {
-            // console.error("Error fetching suggestions:", err);
             return null;
         }
     }
