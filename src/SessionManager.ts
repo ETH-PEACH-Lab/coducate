@@ -30,6 +30,8 @@ const EXCLUDED_DIRECTORIES = new Set([
     ".cache",
 ]);
 
+const EXCLUDED_FILE_EXTENSIONS = new Set([".ipynb"]);
+
 export class SessionManager {
     private provider: WebsocketProvider;
     private controlWebSocket: CustomWebSocket | null = null;
@@ -297,7 +299,7 @@ export class SessionManager {
                 }
 
                 this.applyIncrementalChanges(
-                    event.document.fileName,
+                    relativePath,
                     event.contentChanges
                 );
             }
@@ -531,7 +533,11 @@ export class SessionManager {
 
     // Function to add a single file to fileYMap
     public async addFileToYMap(filePath: string, relativeFilePath: string) {
-        if (!this.fileYMap.has(relativeFilePath)) {
+        if (
+            !this.fileYMap.has(relativeFilePath) &&
+            !this.isExcludedDirectory(filePath) &&
+            !this.isExcludedFile(filePath)
+        ) {
             const yText = new Y.Text();
             this.fileYMap.set(relativeFilePath, yText);
 
@@ -577,6 +583,12 @@ export class SessionManager {
         return pathSegments.some((segment) =>
             EXCLUDED_DIRECTORIES.has(segment)
         );
+    }
+
+    // Helper function to check if a file has an excluded file extension
+    private isExcludedFile(filePath: string): boolean {
+        const fileExtension = path.extname(filePath);
+        return EXCLUDED_FILE_EXTENSIONS.has(fileExtension);
     }
 
     // Function to remove all files within a directory from fileYMap
@@ -638,12 +650,10 @@ export class SessionManager {
 
     // Function to apply incremental changes to Y.Text objects
     private applyIncrementalChanges(
-        fileName: string,
+        relativePath: string,
         contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
     ) {
-        const relativeFileName = this.getRelativeFilePath(fileName);
-
-        const yText = this.fileYMap.get(relativeFileName);
+        const yText = this.fileYMap.get(relativePath);
         if (!yText) {
             return;
         }
