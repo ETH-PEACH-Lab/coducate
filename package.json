@@ -67,6 +67,14 @@
                 "title": "Coducate: Close Explorer"
             },
             {
+                "command": "coducate.showRoomId",
+                "title": "Coducate: Show Room ID"
+            },
+            {
+                "command": "coducate.hideRoomId",
+                "title": "Coducate: Hide Room ID"
+            },
+            {
                 "command": "coducate.changeFontSize",
                 "title": "Coducate: Change Font Size"
             },
