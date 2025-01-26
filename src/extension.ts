@@ -87,9 +87,26 @@ export async function activate(context: vscode.ExtensionContext) {
             });
     }
 
-    // Restore the previously opened files (this is necessary as the creation of a new
-    // Coducate workspace opens a new window with the correct workspace configuration where the files are not
-    // automatically restored)
+    // Restore the previously opened workspace folders
+    const workspaceFolders: string[] | undefined = context.globalState.get(
+        "coducate.workspaceFolders"
+    );
+
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        const foldersToAdd = workspaceFolders.map((folderUriString) => ({
+            uri: vscode.Uri.parse(folderUriString),
+        }));
+
+        vscode.workspace.updateWorkspaceFolders(
+            vscode.workspace.workspaceFolders
+                ? vscode.workspace.workspaceFolders.length
+                : 0,
+            null,
+            ...foldersToAdd
+        );
+    }
+
+    // Restore the previously opened files (this is necessary due to the creation of a new workspace)
     const tabGroupsState = context.globalState.get<
         {
             viewColumn: vscode.ViewColumn;
@@ -166,12 +183,21 @@ export async function activate(context: vscode.ExtensionContext) {
         status,
     });
 
-    if (tabGroupsState) {
-        // Execute the Start Session command for the user as a new Coducate workspace has been created
+    if (tabGroupsState && !workspaceFolders) {
+        // A new session was started so tabGroupsState is available but workspaceFolders is not
         vscode.commands.executeCommand("coducate.startSession");
-
-        // Clear the saved tab groups state
         await context.globalState.update("coducate.tabGroupsState", undefined);
+        await context.globalState.update(
+            "coducate.workspaceFolders",
+            undefined
+        );
+    } else {
+        // The session was ended or the VS Code window was reloaded
+        await context.globalState.update("coducate.tabGroupsState", undefined);
+        await context.globalState.update(
+            "coducate.workspaceFolders",
+            undefined
+        );
     }
 }
 
@@ -331,11 +357,8 @@ function registerCommands(
                 return;
             }
 
-            // Check if the workspace is not stored (workspaceFile exists) or is untitled
-            if (
-                !vscode.workspace.workspaceFile ||
-                vscode.workspace.workspaceFile.scheme === "untitled"
-            ) {
+            // Check if the workspace is not stored (workspaceFile exists)
+            if (!vscode.workspace.workspaceFile) {
                 const workspaceFolders = vscode.workspace.workspaceFolders;
                 if (
                     !workspaceFolders ||
@@ -347,106 +370,70 @@ function registerCommands(
                     return;
                 }
 
-                const saveWorkspaceResponse =
-                    await vscode.window.showWarningMessage(
-                        "It is highly recommended to save your current workspace. This guarantees that different Coducate sessions in multiple VS Code windows do not conflict. Additionally, if multiple root folders are added to the workspace, saving it prevents the need to manually restart the session. Would you like to save the current workspace?",
-                        "Yes",
-                        "No"
-                    );
+                // Create a new workspace with the current folders and files
+                if (workspaceFolders) {
+                    const workspaceContent = {
+                        folders: workspaceFolders.map((folder) => ({
+                            uri: folder.uri.toString(),
+                        })),
+                        settings: {},
+                    };
 
-                if (saveWorkspaceResponse === "Yes") {
-                    // Notify the user to execute the Start Session command again after saving the workspace
-                    await vscode.window.showInformationMessage(
-                        "A new window will be opened with the correct workspace configuration already set up. Click 'Ok' to confirm.",
-                        "Ok"
-                    );
+                    try {
+                        // Capture all file tabs in tab groups
+                        const tabGroupsState = vscode.window.tabGroups.all.map(
+                            (group) => ({
+                                viewColumn: group.viewColumn,
+                                tabs: group.tabs
+                                    .filter(
+                                        (tab) =>
+                                            tab.input instanceof
+                                            vscode.TabInputText
+                                    ) // Only capture files
+                                    .map((tab) => ({
+                                        label: tab.label,
+                                        isActive: tab.isActive,
+                                        uri: (
+                                            tab.input as vscode.TabInputText
+                                        ).uri.toString(),
+                                    })),
+                            })
+                        );
 
-                    // Create a new workspace with the current folders and files
-                    if (workspaceFolders) {
-                        const workspaceContent = {
-                            folders: workspaceFolders.map((folder) => ({
-                                uri: folder.uri.toString(),
-                            })),
-                            settings: {},
-                        };
+                        // // Save tab and terminal state in globalState
+                        await context.globalState.update(
+                            "coducate.tabGroupsState",
+                            tabGroupsState
+                        );
 
-                        try {
-                            // Capture all file tabs in tab groups
-                            const tabGroupsState =
-                                vscode.window.tabGroups.all.map((group) => ({
-                                    viewColumn: group.viewColumn,
-                                    tabs: group.tabs
-                                        .filter(
-                                            (tab) =>
-                                                tab.input instanceof
-                                                vscode.TabInputText
-                                        ) // Only capture files
-                                        .map((tab) => ({
-                                            label: tab.label,
-                                            isActive: tab.isActive,
-                                            uri: (
-                                                tab.input as vscode.TabInputText
-                                            ).uri.toString(),
-                                        })),
-                                }));
+                        // Write the workspace configurations to a temporary file
+                        const tempDir = os.tmpdir();
+                        const workspacePath = path.join(
+                            tempDir,
+                            `coducate-${Date.now()}.code-workspace`
+                        );
 
-                            // Save tab and terminal state in globalState
-                            await context.globalState.update(
-                                "coducate.tabGroupsState",
-                                tabGroupsState
-                            );
+                        await fs.writeFile(
+                            workspacePath,
+                            JSON.stringify(workspaceContent, null, 2)
+                        );
 
-                            // Write the workspace configurations to a temporary file
-                            const tempDir = os.tmpdir();
-                            const workspacePath = path.join(
-                                tempDir,
-                                `coducate-${Date.now()}.code-workspace`
-                            );
-
-                            await fs.writeFile(
-                                workspacePath,
-                                JSON.stringify(workspaceContent, null, 2)
-                            );
-
-                            await vscode.commands.executeCommand(
-                                "vscode.openFolder",
-                                vscode.Uri.file(workspacePath),
-                                true
-                            );
-
-                            // This will be shown in the old window
-                            await vscode.window.showWarningMessage(
-                                "Do NOT use Coducate in this window. A new window has been opened with the correct workspace configuration already set up. Coducate will automatically return to this window after the session has ended.",
-                                "Ok"
-                            );
-                            return;
-                        } catch {
-                            vscode.window.showErrorMessage(
-                                "Failed to save the workspace. Try starting the session again."
-                            );
-                            return;
-                        }
-                    } else {
+                        await vscode.commands.executeCommand(
+                            "vscode.openFolder",
+                            vscode.Uri.file(workspacePath),
+                            false
+                        );
+                    } catch {
                         vscode.window.showErrorMessage(
                             "Failed to save the workspace. Try starting the session again."
                         );
                         return;
                     }
                 } else {
-                    const warningResponse =
-                        await vscode.window.showWarningMessage(
-                            "Proceeding without saving the workspace may cause unexpected behavior. Click 'Ok' to continue or 'Cancel' to abort.",
-                            "Ok",
-                            "Cancel"
-                        );
-
-                    // Abort the session start if the user cancels
-                    if (warningResponse === "Cancel") {
-                        vscode.window.showInformationMessage(
-                            "Session start aborted."
-                        );
-                        return;
-                    }
+                    vscode.window.showErrorMessage(
+                        "Failed to save the workspace. Try starting the session again."
+                    );
+                    return;
                 }
             }
 
@@ -945,30 +932,60 @@ function registerCommands(
                     return;
                 }
 
-                // Notify the user about the upcoming window close
-                const confirmation = await vscode.window.showWarningMessage(
-                    "This window will be closed to clean up the Coducate workspace created for this session. All changes will be saved. Click 'Ok' to confirm.",
-                    "Ok",
-                    "Cancel"
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+
+                // Capture all file tabs in tab groups
+                const tabGroupsState = vscode.window.tabGroups.all.map(
+                    (group) => ({
+                        viewColumn: group.viewColumn,
+                        tabs: group.tabs
+                            .filter(
+                                (tab) =>
+                                    tab.input instanceof vscode.TabInputText
+                            ) // Only capture files
+                            .map((tab) => ({
+                                label: tab.label,
+                                isActive: tab.isActive,
+                                uri: (
+                                    tab.input as vscode.TabInputText
+                                ).uri.toString(),
+                            })),
+                    })
                 );
 
-                if (confirmation === "Ok") {
-                    if (vscode.workspace.workspaceFile) {
-                        // Use closeFolder to remove the workspace
-                        await vscode.commands.executeCommand(
-                            "workbench.action.closeFolder"
-                        );
-                    }
-
-                    // Close the current VS Code window
-                    await vscode.commands.executeCommand(
-                        "workbench.action.closeWindow"
+                // Save workspace folders state in globalState
+                if (workspaceFolders) {
+                    const folderUris = workspaceFolders.map((folder) =>
+                        folder.uri.toString()
                     );
-                } else {
-                    vscode.window.showInformationMessage(
-                        "Session cleanup canceled. Workspace will remain open."
+                    context.globalState.update(
+                        "coducate.workspaceFolders",
+                        folderUris
                     );
                 }
+
+                // Save tab and terminal state in globalState
+                await context.globalState.update(
+                    "coducate.tabGroupsState",
+                    tabGroupsState
+                );
+
+                if (vscode.workspace.workspaceFile) {
+                    // Use closeFolder to remove the workspace
+                    await vscode.commands.executeCommand(
+                        "workbench.action.closeFolder"
+                    );
+                }
+
+                // Open a new VS Code window
+                await vscode.commands.executeCommand(
+                    "workbench.action.newWindow"
+                );
+
+                // Close the current VS Code window
+                await vscode.commands.executeCommand(
+                    "workbench.action.closeWindow"
+                );
             } else {
                 vscode.window.showErrorMessage("No active session found.");
             }
@@ -1113,7 +1130,7 @@ function registerCommands(
                         );
 
                         vscode.window.showInformationMessage(
-                            `Session '${selectedSessionName}' deleted successfully.`
+                            `Session '${selectedSessionName}' successfully deleted.`
                         );
                     } else {
                         vscode.window.showWarningMessage(
@@ -1414,9 +1431,15 @@ function registerCommands(
                                 serializedMap
                             );
 
-                            vscode.window.showInformationMessage(
-                                `Write access granted to all clients (${grantedClientIDs.length} clients).`
-                            );
+                            if (grantedClientIDs.length === 1) {
+                                vscode.window.showInformationMessage(
+                                    `Write access granted to all clients (${grantedClientIDs.length} client).`
+                                );
+                            } else {
+                                vscode.window.showInformationMessage(
+                                    `Write access granted to all clients (${grantedClientIDs.length} clients).`
+                                );
+                            }
                         }
                     } catch (error) {
                         vscode.window.showErrorMessage(
@@ -1808,11 +1831,11 @@ function registerCommands(
                 };
 
                 try {
-                    const terminalOpened =
+                    const isTerminalOpened =
                         await checkConnectionAndOpenTerminal();
-                    if (terminalOpened) {
+                    if (isTerminalOpened) {
                         vscode.window.showInformationMessage(
-                            "Terminal opened successfully."
+                            "Terminal successfully opened."
                         );
                     }
                 } catch (error) {
@@ -1898,11 +1921,11 @@ function registerCommands(
                 };
 
                 try {
-                    const terminalClosed =
+                    const isTerminalClosed =
                         await checkConnectionAndCloseTerminal();
-                    if (terminalClosed) {
+                    if (isTerminalClosed) {
                         vscode.window.showInformationMessage(
-                            "Terminal closed successfully."
+                            "Terminal successfully closed."
                         );
                     }
                 } catch (error) {
@@ -1986,11 +2009,11 @@ function registerCommands(
                 };
 
                 try {
-                    const terminalOpened =
+                    const isExplorerOpened =
                         await checkConnectionAndOpenExplorer();
-                    if (terminalOpened) {
+                    if (isExplorerOpened) {
                         vscode.window.showInformationMessage(
-                            "Explorer opened successfully."
+                            "Explorer successfully opened."
                         );
                     }
                 } catch (error) {
@@ -2076,11 +2099,185 @@ function registerCommands(
                 };
 
                 try {
-                    const terminalClosed =
+                    const isExplorerClosed =
                         await checkConnectionAndCloseTerminal();
-                    if (terminalClosed) {
+                    if (isExplorerClosed) {
                         vscode.window.showInformationMessage(
-                            "Explorer closed successfully."
+                            "Explorer successfully closed."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
+    // Command to show the room ID
+    const showRoomIdCommand = vscode.commands.registerCommand(
+        "coducate.showRoomId",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage(
+                    "No active session found. Please start a session first."
+                );
+                return;
+            }
+
+            if (sessionManager && sessionManager.getControlWebSocket()) {
+                const requestRoomIdShow = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            sessionManager?.getControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "show_room_id_response" &&
+                                        payload.roomId ===
+                                            sessionManager?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "show_room_id_request",
+                                    payload: {
+                                        roomId: sessionManager?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error("Show room ID request timed out")
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const isRoomIdShown = await requestRoomIdShow();
+                    if (isRoomIdShown) {
+                        vscode.window.showInformationMessage(
+                            "Room ID successfully shown."
+                        );
+                    }
+                } catch (error) {
+                    if (error instanceof Error) {
+                        vscode.window.showErrorMessage(error.message);
+                    } else {
+                        vscode.window.showErrorMessage(String(error));
+                    }
+                }
+            } else {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection is not active."
+                );
+            }
+        }
+    );
+
+    // Command to hide the room ID
+    const hideRoomIdCommand = vscode.commands.registerCommand(
+        "coducate.hideRoomId",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage(
+                    "No active session found. Please start a session first."
+                );
+                return;
+            }
+
+            if (sessionManager && sessionManager.getControlWebSocket()) {
+                const requestRoomIdHide = async () => {
+                    return new Promise((resolve, reject) => {
+                        const controlWebSocket =
+                            sessionManager?.getControlWebSocket();
+
+                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
+                            const handleResponse = (message: string) => {
+                                try {
+                                    const { type, payload } =
+                                        JSON.parse(message);
+                                    if (
+                                        type === "hide_room_id_response" &&
+                                        payload.roomId ===
+                                            sessionManager?.getRoomId()
+                                    ) {
+                                        resolve(true);
+                                    }
+                                } catch {
+                                    // Ignore invalid JSON messages
+                                }
+                            };
+
+                            controlWebSocket.onmessage = (event) => {
+                                try {
+                                    handleResponse(event.data.toString());
+                                } catch {
+                                    // Ignore invalid messages
+                                }
+                            };
+
+                            controlWebSocket.send(
+                                JSON.stringify({
+                                    type: "hide_room_id_request",
+                                    payload: {
+                                        roomId: sessionManager?.getRoomId(),
+                                    },
+                                })
+                            );
+
+                            // Timeout in case of no response
+                            setTimeout(() => {
+                                reject(
+                                    new Error("Hide room ID request timed out")
+                                );
+                            }, 5000);
+                        } else {
+                            reject(
+                                new Error("WebSocket connection is not open")
+                            );
+                        }
+                    });
+                };
+
+                try {
+                    const isRoomIdHidden = await requestRoomIdHide();
+                    if (isRoomIdHidden) {
+                        vscode.window.showInformationMessage(
+                            "Room ID successfully hidden."
                         );
                     }
                 } catch (error) {
@@ -2194,8 +2391,8 @@ function registerCommands(
                     };
 
                     try {
-                        const fontSizeChanged = await checkAccess();
-                        if (fontSizeChanged) {
+                        const isFontSizeChanged = await checkAccess();
+                        if (isFontSizeChanged) {
                             vscode.window.showInformationMessage(
                                 `Font size successfully ${
                                     choice === "inc" ? "increased" : "decreased"
@@ -2304,10 +2501,10 @@ function registerCommands(
                 };
 
                 try {
-                    const themeToggled = await sendThemeChangeRequest();
-                    if (themeToggled) {
+                    const isThemeChanged = await sendThemeChangeRequest();
+                    if (isThemeChanged) {
                         vscode.window.showInformationMessage(
-                            `Theme toggled to ${theme} mode successfully.`
+                            `Theme successfully changed to ${theme} mode.`
                         );
                     }
                 } catch (error) {
@@ -2534,6 +2731,8 @@ function registerCommands(
         requestTerminalCloseCommand,
         requestExplorerOpen,
         requestExplorerClose,
+        showRoomIdCommand,
+        hideRoomIdCommand,
         adjustFontSizeCommand,
         changeThemeCommand,
         createNotesCommand,
