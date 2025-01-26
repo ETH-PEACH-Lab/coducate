@@ -85,14 +85,23 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
 
     public removeAllNotesInFile(filePath: string): void {
         if (this.storedNotes[filePath]) {
+            const noteCount = this.storedNotes[filePath].length;
             delete this.storedNotes[filePath];
             this.saveNotes();
             this.refresh();
-            vscode.window.showInformationMessage(
-                `All notes removed from the file: ${this.getRelativeFilePath(
-                    filePath
-                )}`
-            );
+            if (noteCount === 1) {
+                vscode.window.showInformationMessage(
+                    `All notes removed from ${this.getRelativeFilePath(
+                        filePath
+                    )} (${noteCount} note).`
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    `All notes removed from ${this.getRelativeFilePath(
+                        filePath
+                    )} (${noteCount} notes).`
+                );
+            }
         } else {
             vscode.window.showInformationMessage(
                 "No notes found in the specified file."
@@ -106,9 +115,15 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             this.storedNotes = {};
             this.saveNotes();
             this.refresh();
-            vscode.window.showInformationMessage(
-                `All notes removed from the workspace (${noteCount} file/s).`
-            );
+            if (noteCount === 1) {
+                vscode.window.showInformationMessage(
+                    `All notes removed from the workspace (${noteCount} file).`
+                );
+            } else {
+                vscode.window.showInformationMessage(
+                    `All notes removed from the workspace (${noteCount} files).`
+                );
+            }
         } else {
             vscode.window.showInformationMessage(
                 "No notes found in the workspace."
