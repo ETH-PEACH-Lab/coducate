@@ -25,6 +25,41 @@
     ],
     "main": "./dist/extension.js",
     "contributes": {
+        "configuration": {
+            "type": "object",
+            "title": "Coducate",
+            "properties": {
+                "coducate.excludedDirectories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "node_modules",
+                        ".git",
+                        "dist",
+                        "build",
+                        ".vscode",
+                        "coverage",
+                        "out",
+                        "tmp",
+                        "logs",
+                        ".cache"
+                    ],
+                    "description": "Directories to exclude from syncing."
+                },
+                "coducate.excludedFileExtensions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        ".ipynb"
+                    ],
+                    "description": "File extensions to exclude from syncing."
+                }
+            }
+        },
         "commands": [
             {
                 "command": "coducate.startSession",
