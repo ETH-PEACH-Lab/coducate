@@ -223,7 +223,7 @@ async function initializeSession(
         context
     );
 
-    // Wait for WebSocket connection to open (max 10 seconds)
+    // Wait for WebSocket connection to open (max 5 seconds)
     const controlWebSocket = sessionManager.getControlWebSocket();
     if (!controlWebSocket) {
         vscode.window.showErrorMessage("WebSocket connection not available.");
