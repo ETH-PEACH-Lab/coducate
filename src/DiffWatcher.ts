@@ -226,12 +226,15 @@ export class DiffWatcher {
         }
 
         const selectedFile = await vscode.window.showQuickPick(files, {
-            placeHolder: "Select a file to view the diff",
+            placeHolder:
+                "Select a file to view the diff. Press 'Esc' to cancel.",
         });
 
-        if (selectedFile) {
-            this.openDiffEditor(selectedFile);
+        if (!selectedFile) {
+            return;
         }
+
+        this.openDiffEditor(selectedFile);
     }
 
     private async openDiffEditor(relativePath: string) {
