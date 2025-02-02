@@ -161,7 +161,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         } catch (error) {
             vscode.window.showErrorMessage(
-                "An error occurred while restoring tabs. Check the logs for details."
+                "An error occurred while restoring open editors."
             );
         }
     }
@@ -169,12 +169,18 @@ export async function activate(context: vscode.ExtensionContext) {
     // Restore session if a roomId exists
     const roomId = context.workspaceState.get<string>(ROOM_ID_KEY);
     if (roomId) {
-        sessionManager = initializeSession(
+        const sessionManagerFromInitailization = await initializeSession(
             context,
             roomId,
             status,
             SessionType.RESTORED_SESSION
         );
+
+        if (!sessionManagerFromInitailization) {
+            return;
+        }
+
+        sessionManager = sessionManagerFromInitailization;
     }
 
     // Register commands
@@ -204,18 +210,55 @@ export async function activate(context: vscode.ExtensionContext) {
 /**
  * Initialize the live coding session for the given room ID.
  */
-function initializeSession(
+async function initializeSession(
     context: vscode.ExtensionContext,
     roomId: string,
     status: vscode.StatusBarItem,
     sessionType: SessionType
-): SessionManager {
+): Promise<SessionManager | null> {
     const sessionManager = new SessionManager(
         YJS_WEBSOCKET_URL,
         CONTROL_WEBSOCKET_URL(roomId),
         roomId,
         context
     );
+
+    // Wait for WebSocket connection to open (max 10 seconds)
+    const controlWebSocket = sessionManager.getControlWebSocket();
+    if (!controlWebSocket) {
+        vscode.window.showErrorMessage("WebSocket connection not available.");
+        return null;
+    }
+
+    const waitForWebSocketOpen = new Promise<void>((resolve, reject) => {
+        if (controlWebSocket.readyState === WebSocket.OPEN) {
+            resolve(); // Already open
+        } else {
+            const timeout = setTimeout(() => {
+                if (controlWebSocket.readyState !== WebSocket.OPEN) {
+                    vscode.window.showErrorMessage(
+                        "WebSocket connection not available."
+                    );
+                    reject(new Error("WebSocket connection timeout"));
+                }
+            }, 5000); // 5 seconds timeout
+
+            controlWebSocket.addEventListener(
+                "open",
+                () => {
+                    clearTimeout(timeout);
+                    resolve();
+                },
+                { once: true }
+            );
+        }
+    });
+
+    try {
+        await waitForWebSocketOpen;
+    } catch {
+        return null; // Exit if WebSocket fails to connect
+    }
 
     context.subscriptions.push(sessionManager);
 
@@ -281,57 +324,151 @@ function initializeSession(
         .getAwareness()
         .setLocalStateField("vsCodeClient", clientState);
 
-    // Send the currently active file to the server if available
-    const controlWebSocket = sessionManager.getControlWebSocket();
-    if (controlWebSocket && controlWebSocket.readyState === WebSocket.OPEN) {
-        if (relativeFilePath) {
+    // Function to send the currently active file to the server if available
+    const sendInstructorFile = () => {
+        if (!relativeFilePath || !controlWebSocket) {
+            return; // Do nothing if no file is available
+        }
+
+        try {
+            controlWebSocket.send(
+                JSON.stringify({
+                    type: "set_instructor_file_request",
+                    payload: {
+                        roomId: roomId,
+                        instructorFile: relativeFilePath,
+                    },
+                })
+            );
+        } catch (error) {
+            vscode.window.showErrorMessage(
+                `Failed to send instructor file: ${(error as Error).message}`
+            );
+        }
+    };
+
+    // Check WebSocket state and send the file accordingly
+    if (controlWebSocket) {
+        if (controlWebSocket.readyState === WebSocket.OPEN) {
+            sendInstructorFile();
+        } else if (controlWebSocket.readyState === WebSocket.CONNECTING) {
+            controlWebSocket.addEventListener(
+                "open",
+                function onOpenHandler() {
+                    sendInstructorFile();
+                    controlWebSocket.removeEventListener("open", onOpenHandler);
+                },
+                { once: true }
+            );
+        } else {
+            vscode.window.showErrorMessage(
+                "WebSocket connection not available."
+            );
+        }
+    } else {
+        vscode.window.showErrorMessage("WebSocket connection not available.");
+    }
+
+    return sessionManager;
+}
+
+const registerWebSocketCommand = (
+    sessionManager: SessionManager | undefined,
+    commandName: string,
+    requestType: string,
+    responseType: string,
+    successMessage: string,
+    timeoutMessage: string,
+    waitForOpen: boolean = true // Optional parameter to determine if waiting for WebSocket.OPEN is needed
+) => {
+    return vscode.commands.registerCommand(commandName, async () => {
+        if (!sessionManager) {
+            vscode.window.showErrorMessage(
+                "No active session found. Please start a session first."
+            );
+            return;
+        }
+
+        const controlWebSocket = sessionManager.getControlWebSocket();
+        if (!controlWebSocket) {
+            vscode.window.showErrorMessage(
+                "WebSocket connection not available."
+            );
+            return;
+        }
+
+        const sendRequest = async () => {
             try {
-                controlWebSocket.send(
-                    JSON.stringify({
-                        type: "set_instructor_file_request",
-                        payload: {
-                            roomId: roomId,
-                            instructorFile: relativeFilePath,
-                        },
-                    })
+                await sessionManager.sendWebSocketRequest(
+                    controlWebSocket,
+                    requestType,
+                    responseType,
+                    { roomId: sessionManager.getRoomId() },
+                    (payload) => payload.roomId === sessionManager.getRoomId()
                 );
+                vscode.window.showInformationMessage(successMessage);
             } catch (error) {
                 vscode.window.showErrorMessage(
-                    "Failed to send instructor file: " +
-                        (error as Error).message
+                    error instanceof Error ? error.message : timeoutMessage
                 );
             }
+        };
+
+        if (controlWebSocket.readyState === WebSocket.OPEN) {
+            await sendRequest();
+        } else if (
+            waitForOpen &&
+            controlWebSocket.readyState === WebSocket.CONNECTING
+        ) {
+            const onOpenHandler = async () => {
+                await sendRequest();
+                controlWebSocket.removeEventListener("open", onOpenHandler);
+            };
+            controlWebSocket.addEventListener("open", onOpenHandler, {
+                once: true,
+            });
+        } else {
+            vscode.window.showErrorMessage(
+                "WebSocket connection not available."
+            );
         }
-    } else if (
-        controlWebSocket &&
-        controlWebSocket.readyState === WebSocket.CONNECTING
-    ) {
-        controlWebSocket.addEventListener("open", async () => {
-            if (relativeFilePath) {
-                try {
-                    controlWebSocket.send(
-                        JSON.stringify({
-                            type: "set_instructor_file_request",
-                            payload: {
-                                roomId: roomId,
-                                instructorFile: relativeFilePath,
-                            },
-                        })
-                    );
-                } catch (error) {
-                    vscode.window.showErrorMessage(
-                        "Failed to send instructor file: " +
-                            (error as Error).message
-                    );
-                }
-            }
-        });
-    } else {
-        vscode.window.showErrorMessage(
-            "WebSocket connection is not available."
-        );
+    });
+};
+
+/**
+ * Verifys the password for a given room ID.
+ */
+async function verifyPassword(password: string, roomId: string) {
+    const response = await fetch(`${BACKEND_HOST}/api/verify-password`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password, roomId }),
+    });
+
+    if (response.ok) {
+        const data = await response.json();
+        return data.success;
     }
-    return sessionManager;
+}
+
+/**
+ * Checks if the room with a given room ID exists.
+ */
+async function isRoomExisting(roomId: string) {
+    const response = await fetch(`${BACKEND_HOST}/api/verify-room`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ roomId }),
+    });
+
+    if (response.ok) {
+        const data = await response.json();
+        return data.success;
+    }
 }
 
 /**
@@ -440,7 +577,7 @@ function registerCommands(
             const sessionType = await vscode.window.showQuickPick(
                 ["New Session", "Existing Session"],
                 {
-                    placeHolder: "Choose session type",
+                    placeHolder: "Choose session type. Press 'Esc' to cancel.",
                 }
             );
 
@@ -476,7 +613,8 @@ function registerCommands(
                 // Prompt user for a password
                 const password = await vscode.window.showInputBox({
                     prompt: "Enter a password for this session",
-                    placeHolder: "A password is required to secure the session",
+                    placeHolder:
+                        "A password is required to secure the session.",
                     password: true,
                 });
 
@@ -506,6 +644,7 @@ function registerCommands(
                         await vscode.window.showOpenDialog({
                             canSelectFiles: true,
                             canSelectFolders: false,
+                            canSelectMany: false,
                             filters: {
                                 Markdown: ["md"],
                             },
@@ -545,6 +684,7 @@ function registerCommands(
                         await vscode.window.showOpenDialog({
                             canSelectFiles: true,
                             canSelectFolders: false,
+                            canSelectMany: false,
                             filters: {
                                 Markdown: ["md"],
                             },
@@ -604,12 +744,19 @@ function registerCommands(
                     return;
                 }
 
-                sessionManager = initializeSession(
-                    context,
-                    newRoomId,
-                    status,
-                    SessionType.NEW_SESSION
-                );
+                const sessionManagerFromInitailization =
+                    await initializeSession(
+                        context,
+                        newRoomId,
+                        status,
+                        SessionType.NEW_SESSION
+                    );
+
+                if (!sessionManagerFromInitailization) {
+                    return;
+                }
+
+                sessionManager = sessionManagerFromInitailization;
 
                 if (taskDescriptionPath) {
                     try {
@@ -668,95 +815,87 @@ function registerCommands(
                 if (password && sessionManager.getControlWebSocket()) {
                     const controlWebSocket =
                         sessionManager.getControlWebSocket();
+                    if (!controlWebSocket) {
+                        vscode.window.showErrorMessage(
+                            "WebSocket connection not available."
+                        );
+                        return;
+                    }
 
-                    if (
-                        controlWebSocket &&
-                        controlWebSocket.readyState === WebSocket.OPEN
-                    ) {
+                    const sendRequest = async () => {
                         try {
-                            await sendSessionData(
+                            if (!sessionManager) {
+                                vscode.window.showErrorMessage(
+                                    "Session manager is not initialized."
+                                );
+                                return;
+                            }
+
+                            await sessionManager.sendWebSocketRequest(
                                 controlWebSocket,
-                                password,
-                                taskDescriptionPath
-                                    ? sessionManager.toPosixPath(
-                                          taskDescriptionPath.fsPath
-                                      )
-                                    : "",
-                                learningGoalsPath
-                                    ? sessionManager.toPosixPath(
-                                          learningGoalsPath.fsPath
-                                      )
-                                    : "",
-                                newRoomId
+                                "set_session_data_request",
+                                "set_session_data_response",
+                                {
+                                    roomId: newRoomId,
+                                    password,
+                                    taskDescriptionPath: taskDescriptionPath
+                                        ? sessionManager.toPosixPath(
+                                              taskDescriptionPath.fsPath
+                                          )
+                                        : "",
+                                    learningGoalsPath: learningGoalsPath
+                                        ? sessionManager.toPosixPath(
+                                              learningGoalsPath.fsPath
+                                          )
+                                        : "",
+                                },
+                                (payload) =>
+                                    payload.roomId ===
+                                    sessionManager?.getRoomId(),
+                                5000,
+                                "Set session data request timed out."
                             );
                         } catch (error) {
                             vscode.window.showErrorMessage(
-                                "Failed to set room password securely."
+                                "Failed to set room password. Try starting the session again."
                             );
 
                             // End the session if the password fails to set
-                            sessionManager.dispose();
+                            sessionManager?.dispose();
                             sessionManager = undefined;
                             status.text = "$(sync-ignored) Coducate";
                             await context.workspaceState.update(
                                 ROOM_ID_KEY,
                                 undefined
                             );
-
-                            return;
                         }
+                    };
+
+                    if (controlWebSocket.readyState === WebSocket.OPEN) {
+                        await sendRequest();
                     } else if (
-                        controlWebSocket &&
                         controlWebSocket.readyState === WebSocket.CONNECTING
                     ) {
-                        controlWebSocket.addEventListener("open", async () => {
-                            if (sessionManager) {
-                                try {
-                                    await sendSessionData(
-                                        controlWebSocket,
-                                        password,
-                                        taskDescriptionPath
-                                            ? sessionManager.toPosixPath(
-                                                  taskDescriptionPath.fsPath
-                                              )
-                                            : "",
-                                        learningGoalsPath
-                                            ? sessionManager.toPosixPath(
-                                                  learningGoalsPath.fsPath
-                                              )
-                                            : "",
-                                        newRoomId
-                                    );
-                                } catch (error) {
-                                    vscode.window.showErrorMessage(
-                                        "Failed to set room password securely."
-                                    );
-
-                                    // End the session if the password fails to set
-                                    sessionManager.dispose();
-                                    sessionManager = undefined;
-                                    status.text = "$(sync-ignored) Coducate";
-                                    await context.workspaceState.update(
-                                        ROOM_ID_KEY,
-                                        undefined
-                                    );
-
-                                    return;
-                                }
-                            } else {
-                                vscode.window.showErrorMessage(
-                                    "Failed to set room password securely. WebSocket is not initialized."
-                                );
-                            }
-                        });
+                        const onOpenHandler = async () => {
+                            await sendRequest();
+                            controlWebSocket.removeEventListener(
+                                "open",
+                                onOpenHandler
+                            );
+                        };
+                        controlWebSocket.addEventListener(
+                            "open",
+                            onOpenHandler,
+                            { once: true }
+                        );
                     } else {
                         vscode.window.showErrorMessage(
-                            "WebSocket connection is not available. Please try again."
+                            "WebSocket connection not available."
                         );
                     }
                 } else {
                     vscode.window.showErrorMessage(
-                        "Failed to set room password securely. WebSocket is not initialized."
+                        "WebSocket connection not available."
                     );
                 }
             } else if (sessionType === "Existing Session") {
@@ -784,7 +923,7 @@ function registerCommands(
                 const selectedSession = await vscode.window.showQuickPick(
                     sessionChoices,
                     {
-                        placeHolder: "Select an existing session",
+                        placeHolder: "Select an existing session.",
                     }
                 );
 
@@ -815,98 +954,22 @@ function registerCommands(
 
                 await context.workspaceState.update(ROOM_ID_KEY, roomId);
 
-                sessionManager = initializeSession(
-                    context,
-                    roomId,
-                    status,
-                    SessionType.EXISTING_SESSION
-                );
+                const sessionManagerFromInitailization =
+                    await initializeSession(
+                        context,
+                        roomId,
+                        status,
+                        SessionType.EXISTING_SESSION
+                    );
+
+                if (!sessionManagerFromInitailization) {
+                    return;
+                }
+
+                sessionManager = sessionManagerFromInitailization;
             }
         }
     );
-
-    // Helper function to verify the password
-    async function verifyPassword(password: string, roomId: string) {
-        const response = await fetch(`${BACKEND_HOST}/api/verify-password`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ password, roomId }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            return data.success;
-        }
-    }
-
-    // Helper function to check if the room ID already exists
-    async function isRoomExisting(roomId: string) {
-        const response = await fetch(`${BACKEND_HOST}/api/verify-room`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ roomId }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            return data.success;
-        }
-    }
-
-    // Helper function to send the session data to the server
-    async function sendSessionData(
-        controlWebSocket: WebSocket,
-        password: string,
-        taskDescriptionPath: string,
-        learningGoalsPath: string,
-        roomId: string
-    ) {
-        return new Promise(async (resolve, reject) => {
-            const handleServerResponse = (message: string) => {
-                try {
-                    const { type, payload } = JSON.parse(message);
-                    if (
-                        type === "set_session_data_response" &&
-                        payload.roomId === sessionManager?.getRoomId()
-                    ) {
-                        resolve(true);
-                    }
-                } catch {
-                    // Ignore invalid JSON messages
-                }
-            };
-
-            controlWebSocket.onmessage = (event) => {
-                try {
-                    handleServerResponse(event.data.toString());
-                } catch {
-                    // Ignore invalid JSON messages
-                }
-            };
-
-            // Send password to server
-            controlWebSocket.send(
-                JSON.stringify({
-                    type: "set_session_data_request",
-                    payload: {
-                        roomId,
-                        password,
-                        taskDescriptionPath,
-                        learningGoalsPath,
-                    },
-                })
-            );
-
-            // Add a timeout to resolve/reject in case of no response
-            setTimeout(() => {
-                reject(new Error("Set room password timed out"));
-            }, 5000); // 5 seconds timeout
-        });
-    }
 
     const endCommand = vscode.commands.registerCommand(
         "coducate.endSession",
@@ -1034,29 +1097,24 @@ function registerCommands(
                     sessionChoices,
                     {
                         placeHolder:
-                            "Select a session to manage, or choose 'Exit' to finish managing sessions",
+                            "Select a session to manage. Press 'Esc' to cancel.",
                     }
                 );
 
-                if (!selectedSession || selectedSession.label === "Exit") {
+                if (!selectedSession) {
                     return;
                 }
 
                 const selectedSessionName = selectedSession.label;
 
                 const sessionActions = await vscode.window.showQuickPick(
-                    [
-                        "Show password",
-                        "Rename Session",
-                        "Delete Session",
-                        "Cancel",
-                    ],
+                    ["Show password", "Rename Session", "Delete Session"],
                     {
-                        placeHolder: `What would you like to do with '${selectedSessionName}'?`,
+                        placeHolder: `What would you like to do with '${selectedSessionName}'? Press 'Esc' to cancel.`,
                     }
                 );
 
-                if (!sessionActions || sessionActions === "Cancel") {
+                if (!sessionActions) {
                     continue; // Go back to the session list
                 }
 
@@ -1085,8 +1143,8 @@ function registerCommands(
                     }
                 } else if (sessionActions === "Rename Session") {
                     const newSessionName = await vscode.window.showInputBox({
-                        prompt: `Enter a new name for the session '${selectedSessionName}'`,
-                        placeHolder: "New session name",
+                        prompt: `Enter a new name for the session '${selectedSessionName}'.`,
+                        placeHolder: "My New Session Name",
                         value: selectedSessionName,
                     });
 
@@ -1176,16 +1234,21 @@ function registerCommands(
                         "Grant write access to all clients",
                     ],
                     {
-                        placeHolder: "Choose how to grant write access",
+                        placeHolder:
+                            "Choose how to grant write access. Press 'Esc' to cancel.",
                     }
                 );
+
+                if (decision === undefined) {
+                    return;
+                }
 
                 const controlWebSocket = sessionManager?.getControlWebSocket();
                 const roomId = sessionManager?.getRoomId();
 
                 if (!controlWebSocket || !roomId) {
                     vscode.window.showErrorMessage(
-                        "Session or WebSocket connection is not active."
+                        "WebSocket connection not available."
                     );
                     return;
                 }
@@ -1211,11 +1274,13 @@ function registerCommands(
                         const targetSimpleID = await vscode.window.showInputBox(
                             {
                                 prompt: "Enter the user ID to grant write access",
-                                placeHolder: "Enter user ID",
+                                placeHolder:
+                                    "Enter user ID. Press 'Esc' to cancel.",
                             }
                         );
 
                         if (targetSimpleID === undefined) {
+                            await grantAccessLoop(); // Restart the process
                             return;
                         }
 
@@ -1227,99 +1292,44 @@ function registerCommands(
                                 continue;
                             }
 
-                            const grantAccessSpecific = async () => {
-                                return new Promise<boolean>(
-                                    (resolve, reject) => {
-                                        if (
-                                            controlWebSocket.readyState ===
-                                            WebSocket.OPEN
-                                        ) {
-                                            const handleServerResponse = (
-                                                message: string
-                                            ) => {
-                                                try {
-                                                    const { type, payload } =
-                                                        JSON.parse(message);
-                                                    if (
-                                                        type ===
-                                                            "grant_access_response" &&
-                                                        payload.simpleID ===
-                                                            targetSimpleID &&
-                                                        payload.roomId ===
-                                                            roomId
-                                                    ) {
-                                                        resolve(true);
-                                                    }
-                                                } catch {
-                                                    // Ignore invalid JSON messages
-                                                }
-                                            };
-
-                                            controlWebSocket.onmessage = (
-                                                event
-                                            ) => {
-                                                try {
-                                                    handleServerResponse(
-                                                        event.data.toString()
-                                                    );
-                                                } catch {
-                                                    // Ignore invalid JSON messages
-                                                }
-                                            };
-
-                                            controlWebSocket.send(
-                                                JSON.stringify({
-                                                    type: "grant_access_request",
-                                                    payload: {
-                                                        roomId,
-                                                        targetSimpleID,
-                                                    },
-                                                })
-                                            );
-
-                                            setTimeout(() => {
-                                                reject(
-                                                    new Error(
-                                                        `Access check timed out. User ID ${targetSimpleID} may not exist.`
-                                                    )
-                                                );
-                                            }, 5000); // 5 seconds timeout
-                                        } else {
-                                            reject(
-                                                new Error(
-                                                    "WebSocket connection is not open"
-                                                )
-                                            );
-                                        }
-                                    }
-                                );
-                            };
-
                             try {
-                                const accessGranted =
-                                    await grantAccessSpecific();
-                                if (accessGranted) {
-                                    // Add the user ID to the roomAccessMap
-                                    clientSet.add(targetSimpleID);
-                                    roomAccessMap.set(roomId, clientSet);
-                                    const serializedMap = JSON.stringify(
-                                        Array.from(roomAccessMap.entries()).map(
-                                            ([key, value]) => [
-                                                key,
-                                                Array.from(value), // Convert Sets to arrays for serialization
-                                            ]
-                                        )
+                                const responsePayload =
+                                    await sessionManager?.sendWebSocketRequest(
+                                        controlWebSocket,
+                                        "grant_access_request",
+                                        "grant_access_response",
+                                        { roomId, targetSimpleID },
+                                        (payload) =>
+                                            payload.simpleID ===
+                                                targetSimpleID &&
+                                            payload.roomId === roomId,
+                                        5000,
+                                        "Grant write access request timed out. Client ID may not exist."
                                     );
 
-                                    await context.globalState.update(
-                                        "roomAccessMap",
-                                        serializedMap
-                                    );
+                                const responseSimpleID =
+                                    responsePayload?.simpleID;
 
-                                    vscode.window.showInformationMessage(
-                                        `Write access granted to user ID: ${targetSimpleID}`
-                                    );
-                                }
+                                // Add the user ID to the roomAccessMap
+                                clientSet.add(responseSimpleID);
+                                roomAccessMap.set(roomId, clientSet);
+                                const serializedMap = JSON.stringify(
+                                    Array.from(roomAccessMap.entries()).map(
+                                        ([key, value]) => [
+                                            key,
+                                            Array.from(value), // Convert Sets to arrays for serialization
+                                        ]
+                                    )
+                                );
+
+                                await context.globalState.update(
+                                    "roomAccessMap",
+                                    serializedMap
+                                );
+
+                                vscode.window.showInformationMessage(
+                                    `Write access granted to user ID: ${responseSimpleID}`
+                                );
                             } catch (error) {
                                 vscode.window.showErrorMessage(
                                     error instanceof Error
@@ -1343,74 +1353,22 @@ function registerCommands(
                         return;
                     }
 
-                    const grantAccessAll = async () => {
-                        return new Promise<string[] | null>(
-                            (resolve, reject) => {
-                                if (
-                                    controlWebSocket.readyState ===
-                                    WebSocket.OPEN
-                                ) {
-                                    const handleServerResponse = (
-                                        message: string
-                                    ) => {
-                                        try {
-                                            const { type, payload } =
-                                                JSON.parse(message);
-                                            if (
-                                                type ===
-                                                    "grant_access_response" &&
-                                                payload.roomId === roomId &&
-                                                Array.isArray(payload.simpleID)
-                                            ) {
-                                                resolve(
-                                                    payload.simpleID.map(String)
-                                                ); // Convert to string array before resolving
-                                            }
-                                        } catch {
-                                            // Ignore invalid JSON messages
-                                        }
-                                    };
-
-                                    controlWebSocket.onmessage = (event) => {
-                                        try {
-                                            handleServerResponse(
-                                                event.data.toString()
-                                            );
-                                        } catch {
-                                            // Ignore invalid JSON messages
-                                        }
-                                    };
-
-                                    controlWebSocket.send(
-                                        JSON.stringify({
-                                            type: "grant_access_request",
-                                            payload: {
-                                                roomId,
-                                                targetSimpleID: null,
-                                            },
-                                        })
-                                    );
-
-                                    setTimeout(() => {
-                                        reject(
-                                            new Error(
-                                                "Access grant timed out for all clients"
-                                            )
-                                        );
-                                    }, 5000); // 5 seconds timeout
-                                } else {
-                                    reject(
-                                        new Error(
-                                            "WebSocket connection is not open"
-                                        )
-                                    );
-                                }
-                            }
-                        );
-                    };
-
                     try {
-                        const grantedClientIDs = await grantAccessAll();
+                        const responsePayload =
+                            await sessionManager?.sendWebSocketRequest(
+                                controlWebSocket,
+                                "grant_access_request",
+                                "grant_access_response",
+                                { roomId, targetSimpleID: null },
+                                (payload) =>
+                                    payload.roomId === roomId &&
+                                    Array.isArray(payload.simpleID),
+                                5000,
+                                "Grant write access request timed out."
+                            );
+
+                        const grantedClientIDs = responsePayload?.simpleID;
+
                         if (grantedClientIDs) {
                             // Add all client IDs to the roomAccessMap
                             for (const clientID of grantedClientIDs) {
@@ -1466,23 +1424,12 @@ function registerCommands(
                 return;
             }
 
-            // Ask the user if they want to revoke access for all users or a specific user
-            const revokeChoice = await vscode.window.showQuickPick(
-                [
-                    "Revoke access for a specific user",
-                    "Revoke access for all users",
-                ],
-                {
-                    placeHolder: "Choose how to revoke write access",
-                }
-            );
-
             const controlWebSocket = sessionManager.getControlWebSocket();
             const roomId = sessionManager.getRoomId();
 
             if (!controlWebSocket || !roomId) {
                 vscode.window.showErrorMessage(
-                    "Session or WebSocket connection is not active."
+                    "WebSocket connection not available."
                 );
                 return;
             }
@@ -1503,213 +1450,133 @@ function registerCommands(
             // Get the client set for the current room or initialize a new Set
             const clientSet = roomAccessMap.get(roomId) || new Set();
 
+            if (clientSet.size === 0) {
+                vscode.window.showInformationMessage(
+                    "No users have write access."
+                );
+                return;
+            }
+
+            // Ask the user if they want to revoke access for all users or a specific user
+            const revokeChoice = await vscode.window.showQuickPick(
+                [
+                    "Revoke write access for a specific user",
+                    "Revoke write access for all users",
+                ],
+                {
+                    placeHolder:
+                        "Choose how to revoke write access. Press 'Esc' to cancel.",
+                }
+            );
+
+            if (revokeChoice === undefined) {
+                return;
+            }
+
             if (revokeChoice === "Revoke access for a specific user") {
                 while (true) {
+                    if (clientSet.size === 0) {
+                        vscode.window.showInformationMessage(
+                            "No users have write access."
+                        );
+                        return;
+                    }
+
                     // Convert the Set to an array for quick pick
                     const clientList = Array.from(clientSet);
 
                     // Ask the user to choose a client ID from the list or input manually
                     const targetSimpleID = await vscode.window.showQuickPick(
-                        [...clientList, "Type a user ID manually"],
+                        clientList,
                         {
                             placeHolder:
-                                "Choose a user ID to revoke or type manually",
+                                "Choose a user ID to revoke write access. Press 'Esc' to cancel.",
                         }
                     );
 
-                    let finalSimpleID = targetSimpleID;
-
-                    if (targetSimpleID === "Type a user ID manually") {
-                        finalSimpleID = await vscode.window.showInputBox({
-                            prompt: "Enter the user ID to revoke write access",
-                            placeHolder: "Enter user ID",
-                        });
-                    }
-
-                    if (finalSimpleID === undefined) {
+                    if (targetSimpleID === undefined) {
                         return;
                     }
 
-                    if (finalSimpleID !== undefined) {
-                        if (finalSimpleID.trim() === "") {
-                            vscode.window.showErrorMessage(
-                                "No user ID entered."
+                    try {
+                        const responsePayload =
+                            await sessionManager?.sendWebSocketRequest(
+                                controlWebSocket,
+                                "revoke_access_request",
+                                "revoke_access_response",
+                                { roomId, targetSimpleID: targetSimpleID },
+                                (payload) =>
+                                    payload.simpleID === targetSimpleID &&
+                                    payload.roomId === roomId,
+                                5000,
+                                "Revoke write access request timed out."
                             );
-                            continue;
-                        }
-                        const revokeSpecific = async () => {
-                            return new Promise<boolean>((resolve, reject) => {
-                                if (
-                                    controlWebSocket.readyState ===
-                                    WebSocket.OPEN
-                                ) {
-                                    // Define a unique message event handler to listen for the response
-                                    const handleServerResponse = (
-                                        message: string
-                                    ) => {
-                                        try {
-                                            const { type, payload } =
-                                                JSON.parse(message);
-                                            if (
-                                                type ===
-                                                    "revoke_access_response" &&
-                                                payload.simpleID ===
-                                                    finalSimpleID &&
-                                                payload.roomId === roomId
-                                            ) {
-                                                resolve(true);
-                                            }
-                                        } catch {
-                                            // Ignore invalid JSON messages
-                                        }
-                                    };
 
-                                    controlWebSocket.onmessage = (event) => {
-                                        try {
-                                            handleServerResponse(
-                                                event.data.toString()
-                                            );
-                                        } catch {
-                                            // Ignore invalid JSON messages
-                                        }
-                                    };
+                        const responseSimpleID = responsePayload?.simpleID;
 
-                                    controlWebSocket.send(
-                                        JSON.stringify({
-                                            type: "revoke_access_request",
-                                            payload: {
-                                                roomId,
-                                                targetSimpleID: finalSimpleID,
-                                            },
-                                        })
-                                    );
+                        if (responseSimpleID) {
+                            // Remove the specific user from the roomAccessMap
+                            clientSet.delete(responseSimpleID);
+                            roomAccessMap.set(roomId, clientSet);
+                            const serializedMap = JSON.stringify(
+                                Array.from(roomAccessMap.entries()).map(
+                                    ([key, value]) => [
+                                        key,
+                                        Array.from(value), // Convert Set back to array for serialization
+                                    ]
+                                )
+                            );
 
-                                    // Add a timeout to resolve/reject in case of no response
-                                    setTimeout(() => {
-                                        reject(
-                                            new Error("Access check timed out")
-                                        );
-                                    }, 5000); // 5 seconds timeout
-                                } else {
-                                    reject(
-                                        new Error(
-                                            "WebSocket connection is not open"
-                                        )
-                                    );
-                                }
-                            });
-                        };
+                            await context.globalState.update(
+                                "roomAccessMap",
+                                serializedMap
+                            );
 
-                        try {
-                            const accessRevoked = await revokeSpecific();
-                            if (accessRevoked) {
-                                // Remove the specific user from the roomAccessMap
-                                clientSet.delete(finalSimpleID);
-                                roomAccessMap.set(roomId, clientSet);
-                                const serializedMap = JSON.stringify(
-                                    Array.from(roomAccessMap.entries()).map(
-                                        ([key, value]) => [
-                                            key,
-                                            Array.from(value), // Convert Set back to array for serialization
-                                        ]
-                                    )
-                                );
-
-                                await context.globalState.update(
-                                    "roomAccessMap",
-                                    serializedMap
-                                );
-
-                                vscode.window.showInformationMessage(
-                                    `Write access revoked from user ID: ${finalSimpleID}`
-                                );
-                            }
-                        } catch (error) {
-                            vscode.window.showErrorMessage(
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error)
+                            vscode.window.showInformationMessage(
+                                `Write access revoked from user ID: ${responseSimpleID}`
                             );
                         }
-                    } else {
-                        vscode.window.showErrorMessage("No user ID entered.");
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
+                        );
                     }
                 }
-            } else if (revokeChoice === "Revoke access for all users") {
-                const revokeAll = async () => {
-                    return new Promise<boolean>((resolve, reject) => {
-                        if (controlWebSocket.readyState === WebSocket.OPEN) {
-                            // Define a unique message event handler to listen for the response
-                            const handleServerResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "revoke_access_response" &&
-                                        payload.roomId === roomId &&
-                                        payload.simpleID === null
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleServerResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "revoke_access_request",
-                                    payload: { roomId, targetSimpleID: null },
-                                })
-                            );
-
-                            // Add a timeout to resolve/reject in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error(
-                                        "Revocation for all clients timed out"
-                                    )
-                                );
-                            }, 5000); // 5 seconds timeout
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
+            } else if (revokeChoice === "Revoke write access for all users") {
                 try {
-                    const accessRevoked = await revokeAll();
-                    if (accessRevoked) {
-                        // Clear the roomAccessMap for the current room
-                        roomAccessMap.set(roomId, new Set());
-                        const serializedMap = JSON.stringify(
-                            Array.from(roomAccessMap.entries()).map(
-                                ([key, value]) => [
-                                    key,
-                                    Array.from(value), // Convert Set to array for serialization
-                                ]
-                            )
-                        );
+                    await sessionManager?.sendWebSocketRequest(
+                        controlWebSocket,
+                        "revoke_access_request",
+                        "revoke_access_response",
+                        { roomId, targetSimpleID: null },
+                        (payload) =>
+                            payload.roomId === roomId &&
+                            payload.simpleID === null,
+                        5000,
+                        "Revoke write access request timed out."
+                    );
 
-                        await context.globalState.update(
-                            "roomAccessMap",
-                            serializedMap
-                        );
+                    // Clear the roomAccessMap for the current room
+                    roomAccessMap.set(roomId, new Set());
+                    const serializedMap = JSON.stringify(
+                        Array.from(roomAccessMap.entries()).map(
+                            ([key, value]) => [
+                                key,
+                                Array.from(value), // Convert Set to array for serialization
+                            ]
+                        )
+                    );
 
-                        vscode.window.showInformationMessage(
-                            "Write access revoked for all users in this room."
-                        );
-                    }
+                    await context.globalState.update(
+                        "roomAccessMap",
+                        serializedMap
+                    );
+
+                    vscode.window.showInformationMessage(
+                        "Write access revoked for all users in this room."
+                    );
                 } catch (error) {
                     vscode.window.showErrorMessage(
                         error instanceof Error ? error.message : String(error)
@@ -1732,13 +1599,6 @@ function registerCommands(
             const editor = vscode.window.activeTextEditor;
             if (!editor) {
                 vscode.window.showErrorMessage("No active editor to run code.");
-                return;
-            }
-
-            const document = editor.document;
-
-            if (!sessionManager) {
-                vscode.window.showErrorMessage("WebSocket is not initialized.");
                 return;
             }
 
@@ -1766,533 +1626,69 @@ function registerCommands(
     );
 
     // Command to request terminal open
-    const requestTerminalOpenCommand = vscode.commands.registerCommand(
-        "coducate.openTerminal",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const checkConnectionAndOpenTerminal = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "open_terminal_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "open_terminal_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error("Terminal open request timed out")
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isTerminalOpened =
-                        await checkConnectionAndOpenTerminal();
-                    if (isTerminalOpened) {
-                        vscode.window.showInformationMessage(
-                            "Terminal successfully opened."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+    const requestTerminalOpenCommand = registerWebSocketCommand(
+        sessionManager,
+        "coducate.closeTerminal",
+        "close_terminal_request",
+        "close_terminal_response",
+        "Terminal successfully closed.",
+        "Terminal close request timed out",
+        false
     );
 
     // Command to request terminal close
-    const requestTerminalCloseCommand = vscode.commands.registerCommand(
-        "coducate.closeTerminal",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const checkConnectionAndCloseTerminal = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "close_terminal_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "close_terminal_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error(
-                                        "Terminal close request timed out"
-                                    )
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isTerminalClosed =
-                        await checkConnectionAndCloseTerminal();
-                    if (isTerminalClosed) {
-                        vscode.window.showInformationMessage(
-                            "Terminal successfully closed."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+    const requestTerminalCloseCommand = registerWebSocketCommand(
+        sessionManager,
+        "coducate.openTerminal",
+        "open_terminal_request",
+        "open_terminal_response",
+        "Terminal successfully opened.",
+        "Terminal open request timed out",
+        false
     );
 
     // Command to request explorer open
-    const requestExplorerOpen = vscode.commands.registerCommand(
+    const requestExplorerOpenCommand = registerWebSocketCommand(
+        sessionManager,
         "coducate.openExplorer",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const checkConnectionAndOpenExplorer = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "open_explorer_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "open_explorer_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error("Explorer open request timed out")
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isExplorerOpened =
-                        await checkConnectionAndOpenExplorer();
-                    if (isExplorerOpened) {
-                        vscode.window.showInformationMessage(
-                            "Explorer successfully opened."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+        "open_explorer_request",
+        "open_explorer_response",
+        "Explorer successfully opened.",
+        "Explorer open request timed out",
+        false
     );
 
-    // Command to request terminal close
-    const requestExplorerClose = vscode.commands.registerCommand(
+    // Command to request explorer close
+    const requestExplorerCloseCommand = registerWebSocketCommand(
+        sessionManager,
         "coducate.closeExplorer",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const checkConnectionAndCloseTerminal = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "close_explorer_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "close_explorer_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error(
-                                        "Explorer close request timed out"
-                                    )
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isExplorerClosed =
-                        await checkConnectionAndCloseTerminal();
-                    if (isExplorerClosed) {
-                        vscode.window.showInformationMessage(
-                            "Explorer successfully closed."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+        "close_explorer_request",
+        "close_explorer_response",
+        "Explorer successfully closed.",
+        "Explorer close request timed out",
+        false
     );
 
-    // Command to show the room ID
-    const showRoomIdCommand = vscode.commands.registerCommand(
+    // Command to show room ID
+    const showRoomIdCommand = registerWebSocketCommand(
+        sessionManager,
         "coducate.showRoomId",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const requestRoomIdShow = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "show_room_id_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "show_room_id_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error("Show room ID request timed out")
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isRoomIdShown = await requestRoomIdShow();
-                    if (isRoomIdShown) {
-                        vscode.window.showInformationMessage(
-                            "Room ID successfully shown."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+        "show_room_id_request",
+        "show_room_id_response",
+        "Room ID successfully shown.",
+        "Show room ID request timed out",
+        false
     );
 
-    // Command to hide the room ID
-    const hideRoomIdCommand = vscode.commands.registerCommand(
+    // Command to hide room ID
+    const hideRoomIdCommand = registerWebSocketCommand(
+        sessionManager,
         "coducate.hideRoomId",
-        async () => {
-            if (!sessionManager) {
-                vscode.window.showErrorMessage(
-                    "No active session found. Please start a session first."
-                );
-                return;
-            }
-
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                const requestRoomIdHide = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "hide_room_id_response" &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "hide_room_id_request",
-                                    payload: {
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error("Hide room ID request timed out")
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isRoomIdHidden = await requestRoomIdHide();
-                    if (isRoomIdHidden) {
-                        vscode.window.showInformationMessage(
-                            "Room ID successfully hidden."
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
-                vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
-                );
-            }
-        }
+        "hide_room_id_request",
+        "hide_room_id_response",
+        "Room ID successfully hidden.",
+        "Hide room ID request timed out",
+        false
     );
 
     const adjustFontSizeCommand = vscode.commands.registerCommand(
@@ -2311,104 +1707,58 @@ function registerCommands(
                 { label: "Increase Font Size" },
                 { label: "Decrease Font Size" },
             ];
-            quickPick.title = "Adjust Font Size";
-            quickPick.placeholder =
-                "Select an action. Press Esc or click on editor to close the panel.";
-            quickPick.buttons = [vscode.QuickInputButtons.Back]; // Add a close button
+            quickPick.title = "Change Font Size";
+            quickPick.placeholder = "Select an action. Press 'Esc' to cancel.";
+            quickPick.buttons = [vscode.QuickInputButtons.Back];
 
             quickPick.onDidTriggerButton(() => {
                 quickPick.hide();
             });
 
             quickPick.onDidChangeSelection(async (selection) => {
-                if (!selection[0]) {
+                if (!selection[0] || !sessionManager) {
+                    vscode.window.showErrorMessage(
+                        "Invalid input or session not active."
+                    );
                     return;
                 }
 
                 const choice = selection[0].label;
+                const increaseFontSize = choice === "Increase Font Size";
+                const controlWebSocket = sessionManager.getControlWebSocket();
 
-                if (sessionManager && sessionManager.getControlWebSocket()) {
-                    const checkAccess = async () => {
-                        return new Promise((resolve, reject) => {
-                            const controlWebSocket =
-                                sessionManager?.getControlWebSocket();
-                            if (
-                                controlWebSocket?.readyState === WebSocket.OPEN
-                            ) {
-                                const handleServerResponse = (
-                                    message: string
-                                ) => {
-                                    try {
-                                        const { type, payload } =
-                                            JSON.parse(message);
-                                        if (
-                                            type ===
-                                                "change_font_size_response" &&
-                                            payload.roomId ===
-                                                sessionManager?.getRoomId()
-                                        ) {
-                                            resolve(true);
-                                        }
-                                    } catch {
-                                        // Ignore invalid JSON messages
-                                    }
-                                };
-
-                                controlWebSocket.onmessage = (event) => {
-                                    try {
-                                        handleServerResponse(
-                                            event.data.toString()
-                                        );
-                                    } catch {
-                                        // Ignore invalid JSON messages
-                                    }
-                                };
-
-                                controlWebSocket.send(
-                                    JSON.stringify({
-                                        type: "change_font_size_request",
-                                        payload: {
-                                            roomId: sessionManager?.getRoomId(),
-                                            increase:
-                                                choice === "Increase Font Size",
-                                        },
-                                    })
-                                );
-
-                                setTimeout(() => {
-                                    reject(
-                                        new Error("Font size change timed out")
-                                    );
-                                }, 5000); // 5 seconds timeout
-                            } else {
-                                reject(
-                                    new Error(
-                                        "WebSocket connection is not open"
-                                    )
-                                );
-                            }
-                        });
-                    };
-
-                    try {
-                        const isFontSizeChanged = await checkAccess();
-                        if (isFontSizeChanged) {
-                            vscode.window.showInformationMessage(
-                                `Font size successfully ${
-                                    choice === "inc" ? "increased" : "decreased"
-                                }.`
-                            );
-                        }
-                    } catch (error) {
-                        if (error instanceof Error) {
-                            vscode.window.showErrorMessage(error.message);
-                        } else {
-                            vscode.window.showErrorMessage(String(error));
-                        }
-                    }
-                } else {
+                if (!controlWebSocket) {
                     vscode.window.showErrorMessage(
-                        "Invalid input or session not active."
+                        "WebSocket connection not available."
+                    );
+                    return;
+                }
+
+                try {
+                    await sessionManager.sendWebSocketRequest(
+                        controlWebSocket,
+                        "change_font_size_request",
+                        "change_font_size_response",
+                        {
+                            roomId: sessionManager.getRoomId(),
+                            increase: increaseFontSize,
+                        },
+                        (payload) =>
+                            payload.roomId === sessionManager?.getRoomId(),
+                        5000,
+                        "Change font size request timed out."
+                    );
+
+                    vscode.window.showInformationMessage(
+                        `Font size successfully ${
+                            increaseFontSize ? "increased" : "decreased"
+                        }.`
+                    );
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        error instanceof Error
+                            ? error.message
+                            : "Font size change request failed."
                     );
                 }
             });
@@ -2418,7 +1768,6 @@ function registerCommands(
         }
     );
 
-    // Command to toggle theme
     const changeThemeCommand = vscode.commands.registerCommand(
         "coducate.changeTheme",
         async () => {
@@ -2429,94 +1778,49 @@ function registerCommands(
                 return;
             }
 
-            if (sessionManager && sessionManager.getControlWebSocket()) {
-                // Prompt user to select theme
-                const theme = await vscode.window.showQuickPick(
-                    ["Dark", "Light"],
+            const controlWebSocket = sessionManager.getControlWebSocket();
+            if (!controlWebSocket) {
+                vscode.window.showErrorMessage(
+                    "WebSocket connection not available."
+                );
+                return;
+            }
+
+            // Prompt user to select theme
+            const theme = await vscode.window.showQuickPick(["Dark", "Light"], {
+                placeHolder: "Select theme",
+            });
+
+            if (!theme) {
+                return; // User canceled selection
+            }
+
+            const selectedTheme = theme.toLowerCase();
+
+            try {
+                await sessionManager.sendWebSocketRequest(
+                    controlWebSocket,
+                    "change_theme_request",
+                    "change_theme_response",
                     {
-                        placeHolder: "Select theme",
-                    }
+                        changedTheme: selectedTheme,
+                        roomId: sessionManager.getRoomId(),
+                    },
+                    (payload) =>
+                        payload.changedTheme === selectedTheme &&
+                        payload.roomId === sessionManager?.getRoomId(),
+                    5000,
+                    "Change theme request timed out."
                 );
 
-                if (!theme) {
-                    return;
-                }
-
-                const selectedTheme = theme.toLowerCase();
-
-                const sendThemeChangeRequest = async () => {
-                    return new Promise((resolve, reject) => {
-                        const controlWebSocket =
-                            sessionManager?.getControlWebSocket();
-
-                        if (controlWebSocket?.readyState === WebSocket.OPEN) {
-                            const handleResponse = (message: string) => {
-                                try {
-                                    const { type, payload } =
-                                        JSON.parse(message);
-                                    if (
-                                        type === "change_theme_response" &&
-                                        payload.changedTheme ===
-                                            selectedTheme &&
-                                        payload.roomId ===
-                                            sessionManager?.getRoomId()
-                                    ) {
-                                        resolve(true);
-                                    }
-                                } catch {
-                                    // Ignore invalid JSON messages
-                                }
-                            };
-
-                            controlWebSocket.onmessage = (event) => {
-                                try {
-                                    handleResponse(event.data.toString());
-                                } catch {
-                                    // Ignore invalid messages
-                                }
-                            };
-
-                            controlWebSocket.send(
-                                JSON.stringify({
-                                    type: "change_theme_request",
-                                    payload: {
-                                        changedTheme: selectedTheme,
-                                        roomId: sessionManager?.getRoomId(),
-                                    },
-                                })
-                            );
-
-                            // Timeout in case of no response
-                            setTimeout(() => {
-                                reject(
-                                    new Error("Theme toggle request timed out")
-                                );
-                            }, 5000);
-                        } else {
-                            reject(
-                                new Error("WebSocket connection is not open")
-                            );
-                        }
-                    });
-                };
-
-                try {
-                    const isThemeChanged = await sendThemeChangeRequest();
-                    if (isThemeChanged) {
-                        vscode.window.showInformationMessage(
-                            `Theme successfully changed to ${theme} mode.`
-                        );
-                    }
-                } catch (error) {
-                    if (error instanceof Error) {
-                        vscode.window.showErrorMessage(error.message);
-                    } else {
-                        vscode.window.showErrorMessage(String(error));
-                    }
-                }
-            } else {
+                vscode.window.showInformationMessage(
+                    `Theme successfully changed to ${theme} mode.`
+                );
+            } catch (error) {
                 vscode.window.showErrorMessage(
-                    "WebSocket connection is not active."
+                    error instanceof Error
+                        ? error.message
+                        : "Theme change request failed."
                 );
             }
         }
@@ -2540,11 +1844,13 @@ function registerCommands(
 
                 if (!selection.isEmpty) {
                     const title = await vscode.window.showInputBox({
-                        prompt: "Enter a title for the note",
+                        prompt: "Enter a title for the note. Press 'Esc' to cancel.",
                         placeHolder: "e.g., Check if user input is valid",
                     });
 
-                    if (!title) {
+                    if (title === undefined) {
+                        return; // User cancelled
+                    } else if (title === "") {
                         vscode.window.showErrorMessage(
                             "Note title cannot be empty."
                         );
@@ -2621,10 +1927,13 @@ function registerCommands(
                     { label: "Insert at Cursor", value: "insert" },
                     { label: "Delete Note", value: "delete" },
                 ],
-                { placeHolder: "What do you want to do with this note?" }
+                {
+                    placeHolder:
+                        "What do you want to do with this note? Click 'Esc' to cancel.",
+                }
             );
 
-            if (!choice) {
+            if (choice === undefined) {
                 return; // User cancelled
             }
 
@@ -2673,14 +1982,17 @@ function registerCommands(
                 [
                     { label: "Remove all notes in this file", value: "file" },
                     {
-                        label: "Remove all notes in the workspace",
+                        label: "Remove all notes in this workspace",
                         value: "workspace",
                     },
                 ],
-                { placeHolder: "Choose an option to remove notes" }
+                {
+                    placeHolder:
+                        "Choose which notes to remove. Click 'Esc' to cancel.",
+                }
             );
 
-            if (!choice) {
+            if (choice === undefined) {
                 return; // User cancelled
             }
 
@@ -2729,8 +2041,8 @@ function registerCommands(
         emulateTerminalCommand,
         requestTerminalOpenCommand,
         requestTerminalCloseCommand,
-        requestExplorerOpen,
-        requestExplorerClose,
+        requestExplorerOpenCommand,
+        requestExplorerCloseCommand,
         showRoomIdCommand,
         hideRoomIdCommand,
         adjustFontSizeCommand,
