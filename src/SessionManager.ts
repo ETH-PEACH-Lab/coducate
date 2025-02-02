@@ -17,21 +17,6 @@ interface CustomWebSocket extends WebSocket {
     roomId?: string;
 }
 
-const EXCLUDED_DIRECTORIES = new Set([
-    "node_modules",
-    ".git",
-    "dist",
-    "build",
-    ".vscode",
-    "coverage",
-    "out",
-    "tmp",
-    "logs",
-    ".cache",
-]);
-
-const EXCLUDED_FILE_EXTENSIONS = new Set([".ipynb"]);
-
 export class SessionManager {
     private provider: WebsocketProvider;
     private controlWebSocket: CustomWebSocket | null = null;
@@ -43,6 +28,8 @@ export class SessionManager {
     private yDoc: Y.Doc;
     private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
+    private excludedDirectories: Set<string> = new Set();
+    private excludedFileExtensions: Set<string> = new Set();
     private diffWatcher: DiffWatcher;
     private notebookFilePath: string;
     private hasExecutedOpenTerminal: boolean = false;
@@ -103,9 +90,14 @@ export class SessionManager {
 
         this.disposables.push(codeLensDisposable, inlineCompletionDisposable);
 
+        // Load settings
+        this.loadSettings();
+
         // Sync initial files from each workspace folder
         vscode.workspace.workspaceFolders?.forEach((folder) => {
-            this.addAllFilesInDirectory(this.toPosixPath(folder.uri.fsPath));
+            this.addAllFilesInWorkspaceFolder(
+                this.toPosixPath(folder.uri.fsPath)
+            );
         });
 
         this.notebookFilePath = path.posix.join(
@@ -116,6 +108,10 @@ export class SessionManager {
 
         this.setupVSCodeListeners();
     }
+
+    /*
+     * Getter methods
+     */
 
     public getProvider() {
         return this.provider;
@@ -149,28 +145,9 @@ export class SessionManager {
         return filePath.replace(/\\/g, "/");
     }
 
-    public getRelativeFilePath(filePath: string): string {
-        const normalizedFilePath = this.toPosixPath(filePath);
-        const workspaceFolder = vscode.workspace.workspaceFolders?.find(
-            (folder) =>
-                normalizedFilePath.startsWith(
-                    this.toPosixPath(folder.uri.fsPath) + path.posix.sep
-                )
-        );
-
-        if (workspaceFolder) {
-            const workspaceFolderPath = this.toPosixPath(
-                workspaceFolder.uri.fsPath
-            );
-            const relativePath = path.posix.relative(
-                workspaceFolderPath,
-                normalizedFilePath
-            );
-            return `${workspaceFolder.name}/${relativePath}`;
-        }
-
-        return normalizedFilePath; // Return absolute path if file is not within any workspace folder
-    }
+    /*
+     * WebSocket connection management
+     */
 
     private initializeControlWebSocket() {
         if (!this.shouldConnect) {
@@ -197,7 +174,7 @@ export class SessionManager {
             this.scheduleReconnect();
         };
 
-        ws.onerror = (error) => {
+        ws.onerror = () => {
             ws.close();
             this.scheduleReconnect();
         };
@@ -233,6 +210,10 @@ export class SessionManager {
         }, backoffTime);
     }
 
+    /*
+     * VSCode event listeners
+     */
+
     private setupVSCodeListeners() {
         // Listen to file renames
         vscode.workspace.onDidRenameFiles(async (event) => {
@@ -267,13 +248,13 @@ export class SessionManager {
                 const folderPath = addedFolder.uri.fsPath;
 
                 // Add all files in the new folder to fileYMap
-                await this.addAllFilesInDirectory(folderPath);
+                await this.addAllFilesInWorkspaceFolder(folderPath);
             }
 
             // Handle removed workspace folders
             for (const removedFolder of event.removed) {
                 // Remove all files in the folder from fileYMap
-                this.removeAllFilesInDirectory(removedFolder.name);
+                this.removeAllFilesInWorkspaceFolder(removedFolder.name);
             }
         });
 
@@ -379,7 +360,13 @@ export class SessionManager {
                                 },
                             })
                         );
-                    } catch (error) {}
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            `Failed to send instructor file: ${
+                                (error as Error).message
+                            }`
+                        );
+                    }
                 }
             }
         });
@@ -395,9 +382,6 @@ export class SessionManager {
                 if (fileStat.type === vscode.FileType.File) {
                     // Add single file to fileYMap
                     await this.addFileToYMap(filePath, relativeFilePath);
-                } else if (fileStat.type === vscode.FileType.Directory) {
-                    // Folder detected - add all files within this folder to fileYMap
-                    await this.addAllFilesInDirectory(filePath);
                 }
             }
         });
@@ -449,45 +433,11 @@ export class SessionManager {
         });
     }
 
-    private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
-        event.cellChanges.forEach((change) => {
-            // Handle only changes in cell outputs
-            if (change.outputs) {
-                const cell = change.cell;
-                const cellOutputs = this.getCellOutputs(cell);
-                if (cellOutputs.length > 0) {
-                    this.addOutputToYMap(
-                        this.notebookFilePath,
-                        JSON.stringify(cellOutputs)
-                    );
-                }
-            }
-        });
-    }
+    /*
+     * Notebook Cell Output Handling
+     */
 
-    private getCellOutputs(
-        cell: vscode.NotebookCell
-    ): { mime: string; data: string | Blob }[] {
-        const outputs = [];
-
-        for (const output of cell.outputs) {
-            if (output.items) {
-                for (const item of output.items) {
-                    const mimeType = this.getMimeType(item.mime);
-                    // Convert the UInt8Array to Base64 or Blob based on the data size
-                    const data = this.convertBinaryData(item.data, mimeType);
-                    outputs.push({
-                        mime: mimeType,
-                        data: data,
-                    });
-                }
-            }
-        }
-
-        return outputs;
-    }
-
-    // Helper function to determine the MIME type of the item based on its mime property
+    // Function to determine the MIME type of the item based on its mime property
     private getMimeType(mime: string): string {
         if (mime.includes("image/png")) {
             return "image/png";
@@ -523,6 +473,446 @@ export class SessionManager {
         }
     }
 
+    // Function to extract cell outputs from a notebook cell
+    private getCellOutputs(
+        cell: vscode.NotebookCell
+    ): { mime: string; data: string | Blob }[] {
+        const outputs = [];
+
+        for (const output of cell.outputs) {
+            if (output.items) {
+                for (const item of output.items) {
+                    const mimeType = this.getMimeType(item.mime);
+                    // Convert the UInt8Array to Base64 or Blob based on the data size
+                    const data = this.convertBinaryData(item.data, mimeType);
+                    outputs.push({
+                        mime: mimeType,
+                        data: data,
+                    });
+                }
+            }
+        }
+
+        return outputs;
+    }
+
+    //  Function to handle changes in notebook cells
+    private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
+        event.cellChanges.forEach((change) => {
+            // Handle only changes in cell outputs
+            if (change.outputs) {
+                const cell = change.cell;
+                const cellOutputs = this.getCellOutputs(cell);
+                if (cellOutputs.length > 0) {
+                    this.addOutputToYMap(
+                        this.notebookFilePath,
+                        JSON.stringify(cellOutputs)
+                    );
+                }
+            }
+        });
+    }
+
+    /*
+     * Settings and File Management
+     */
+
+    // Function to request the task description and learning goals paths from the server
+    public async requestTaskData(roomId: string) {
+        let taskData: {
+            taskDescriptionPath: string;
+            learningGoalsPath: string;
+        } = {
+            taskDescriptionPath: "",
+            learningGoalsPath: "",
+        };
+
+        const getTaskDataResponse = async () => {
+            return new Promise<boolean>((resolve, reject) => {
+                if (!this.controlWebSocket) {
+                    return reject(
+                        new Error("WebSocket connection not available.")
+                    );
+                }
+
+                let timeout: NodeJS.Timeout | undefined;
+
+                // Define a unique message event handler
+                const handleServerResponse = (event: any) => {
+                    try {
+                        const message =
+                            typeof event.data === "string"
+                                ? event.data
+                                : event.toString();
+                        const { type, payload } = JSON.parse(message);
+
+                        if (
+                            type === "get_task_data_response" &&
+                            payload.roomId === roomId
+                        ) {
+                            taskData.taskDescriptionPath =
+                                payload.taskDescriptionPath;
+                            taskData.learningGoalsPath =
+                                payload.learningGoalsPath;
+                            resolve(true);
+                        }
+                    } catch (error) {
+                        reject(
+                            new Error("Invalid response format from server.")
+                        );
+                    } finally {
+                        cleanup();
+                    }
+                };
+
+                // Cleanup function for timeout and event listener
+                const cleanup = () => {
+                    if (timeout) {
+                        clearTimeout(timeout);
+                    }
+                    this.controlWebSocket?.removeEventListener(
+                        "message",
+                        handleServerResponse
+                    );
+                };
+
+                // Attach the event listener
+                this.controlWebSocket.addEventListener(
+                    "message",
+                    handleServerResponse
+                );
+
+                // Send the request when the connection is open
+                const sendRequest = () => {
+                    this.controlWebSocket?.send(
+                        JSON.stringify({
+                            type: "get_task_data_request",
+                            payload: { roomId },
+                        })
+                    );
+                };
+
+                if (this.controlWebSocket.readyState === WebSocket.OPEN) {
+                    sendRequest();
+                } else if (
+                    this.controlWebSocket.readyState === WebSocket.CONNECTING
+                ) {
+                    this.controlWebSocket.addEventListener(
+                        "open",
+                        sendRequest,
+                        { once: true }
+                    );
+                } else {
+                    return reject(
+                        new Error("WebSocket connection not available.")
+                    );
+                }
+
+                // Set a timeout to reject the promise if no response is received
+                timeout = setTimeout(() => {
+                    reject(new Error("Request timed out."));
+                    cleanup();
+                }, 5000);
+            });
+        };
+
+        try {
+            const success = await getTaskDataResponse();
+            if (success) {
+                return taskData;
+            }
+        } catch (error) {
+            vscode.window.showErrorMessage(
+                error instanceof Error ? error.message : String(error)
+            );
+        }
+    }
+
+    /**
+     * Sends a WebSocket request and waits for a response.
+     * @param {WebSocket} controlWebSocket - The WebSocket connection.
+     * @param {string} requestType - The type of request to send.
+     * @param {string} responseType - The expected response type.
+     * @param {any} payload - The payload to send with the request.
+     * @param {(payload: any) => boolean} validateResponse - Function to validate if the response matches expectations.
+     * @param {number} timeoutMs - Timeout duration in milliseconds (default 5000ms).
+     * @param {string} timeoutMessage - Custom message to display if the request times out.
+     * @returns {Promise<any>} - Resolves with the response payload or rejects with an error.
+     */
+    public sendWebSocketRequest = async (
+        controlWebSocket: WebSocket,
+        requestType: string,
+        responseType: string,
+        payload: any,
+        validateResponse: (payload: any) => boolean,
+        timeoutMs: number = 5000,
+        timeoutMessage?: string
+    ): Promise<any> => {
+        return new Promise((resolve, reject) => {
+            if (
+                !controlWebSocket ||
+                controlWebSocket.readyState !== WebSocket.OPEN
+            ) {
+                return reject(new Error("WebSocket connection not available."));
+            }
+
+            let timeout: NodeJS.Timeout | undefined;
+
+            const handleServerResponse = (event: any) => {
+                try {
+                    // Convert event.data to a string if needed
+                    const message =
+                        typeof event.data === "string"
+                            ? event.data
+                            : event.data.toString();
+
+                    const { type, payload: responsePayload } =
+                        JSON.parse(message);
+                    if (
+                        type === responseType &&
+                        validateResponse(responsePayload)
+                    ) {
+                        cleanup();
+                        resolve(responsePayload);
+                    }
+                } catch (error) {
+                    console.error(
+                        `Invalid JSON from WebSocket (${responseType}):`,
+                        error
+                    );
+                }
+            };
+
+            const cleanup = () => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                }
+                controlWebSocket.removeEventListener(
+                    "message",
+                    handleServerResponse
+                );
+            };
+
+            // Attach event listener for the response
+            controlWebSocket.addEventListener("message", handleServerResponse);
+
+            // Send the request
+            try {
+                controlWebSocket.send(
+                    JSON.stringify({
+                        type: requestType,
+                        payload,
+                    })
+                );
+            } catch (error) {
+                cleanup();
+                return reject(
+                    new Error(
+                        `Failed to send request: ${(error as Error).message}`
+                    )
+                );
+            }
+
+            // Set a timeout in case of no response
+            timeout = setTimeout(() => {
+                cleanup();
+                reject(
+                    timeoutMessage
+                        ? timeoutMessage
+                        : new Error(`${requestType} request timed out`)
+                );
+            }, timeoutMs);
+        });
+    };
+
+    // Function to get the relative file path within the workspace
+    public getRelativeFilePath(filePath: string): string {
+        const normalizedFilePath = this.toPosixPath(filePath);
+        const workspaceFolder = vscode.workspace.workspaceFolders?.find(
+            (folder) =>
+                normalizedFilePath.startsWith(
+                    this.toPosixPath(folder.uri.fsPath) + path.posix.sep
+                )
+        );
+
+        if (workspaceFolder) {
+            const workspaceFolderPath = this.toPosixPath(
+                workspaceFolder.uri.fsPath
+            );
+            const relativePath = path.posix.relative(
+                workspaceFolderPath,
+                normalizedFilePath
+            );
+            return `${workspaceFolder.name}/${relativePath}`;
+        }
+
+        return normalizedFilePath; // Return absolute path if file is not within any workspace folder
+    }
+
+    // Function to get all file names from files in fileYMap which have a specific file extension
+    public getFilesByExtension(extension: string): string[] {
+        const filesWithExtension = Array.from(this.fileYMap.keys()).filter(
+            (key) => key.endsWith(extension)
+        );
+
+        return filesWithExtension;
+    }
+
+    // Function to check if a file has changes tracked in DiffWatcher
+    public hasChangesTracked(filePath: string): boolean {
+        return this.diffWatcher?.getDiffFilesSet().has(filePath) || false;
+    }
+
+    // Function to handle changes in excluded file extensions
+    private async handleFileExtensionChanges(
+        oldExcluded: Set<string>,
+        newExcluded: Set<string>
+    ) {
+        const addedExtensions = Array.from(newExcluded).filter(
+            (ext) => !oldExcluded.has(ext)
+        );
+        const removedExtensions = Array.from(oldExcluded).filter(
+            (ext) => !newExcluded.has(ext)
+        );
+
+        // Remove files with newly excluded extensions
+        for (const ext of addedExtensions) {
+            const fileHasExtension = (file: string) => file.endsWith(ext);
+
+            let hasChanges = false;
+            for (const file of this.fileYMap.keys()) {
+                if (fileHasExtension(file) && this.hasChangesTracked(file)) {
+                    hasChanges = true;
+                    await vscode.window.showWarningMessage(
+                        `${file} contains client changes. Please resolve these changes before excluding the file extension.`,
+                        "Ok"
+                    );
+
+                    // Remove the file extension from the excluded list in the settings
+                    await this.removeSettingValue(
+                        "excludedFileExtensions",
+                        ext
+                    );
+
+                    break;
+                }
+            }
+
+            if (!hasChanges) {
+                await this.removeFilesByExtension(ext);
+            }
+        }
+
+        // Add back files with newly included extensions
+        for (const ext of removedExtensions) {
+            await this.addFilesByExtension(ext);
+        }
+    }
+
+    // Function to handle changes in excluded file extensions
+    private async handleDirectoryChanges(
+        oldExcluded: Set<string>,
+        newExcluded: Set<string>
+    ) {
+        const addedDirectories = Array.from(newExcluded).filter(
+            (dir) => !oldExcluded.has(dir)
+        );
+        const removedDirectories = Array.from(oldExcluded).filter(
+            (dir) => !newExcluded.has(dir)
+        );
+
+        const fileIsInDirectory = (file: string, dir: string) =>
+            file.startsWith(`${dir}/`) ||
+            file.includes(`/${dir}/`) ||
+            file.endsWith(`/${dir}`);
+
+        // Remove newly excluded directories and their files
+        for (const dir of addedDirectories) {
+            let hasChanges = false;
+            for (const file of this.fileYMap.keys()) {
+                if (
+                    fileIsInDirectory(file, dir) &&
+                    this.hasChangesTracked(file)
+                ) {
+                    hasChanges = true;
+                    await vscode.window.showWarningMessage(
+                        `${dir} contains files with client changes. Please resolve these changes before excluding the directory.`,
+                        "Ok"
+                    );
+
+                    // Remove the directory from the excluded list in settings
+                    await this.removeSettingValue("excludedDirectories", dir);
+
+                    break;
+                }
+            }
+
+            if (!hasChanges) {
+                await this.removeAllFilesInDirectory(dir);
+            }
+        }
+
+        // Add back files from newly included directories
+        for (const dir of removedDirectories) {
+            await this.addAllFilesInDirectory(dir);
+        }
+    }
+
+    // Function to load settings
+    // It prioritizes the settings with changes (user or workspace settings) with regards to the default values
+    // If both user and workspace settings have changes, the workspace settings take precedence
+    private loadSettings() {
+        // Fetch configuration settings
+        const config = vscode.workspace.getConfiguration("coducate");
+
+        const excludedDirs = config.get<string[]>("excludedDirectories", []);
+        const excludedExts = config.get<string[]>("excludedFileExtensions", []);
+
+        const oldExcludedDirectories = this.excludedDirectories;
+        const oldExcludedFileExtensions = this.excludedFileExtensions;
+
+        this.excludedDirectories = new Set(excludedDirs);
+        this.excludedFileExtensions = new Set(excludedExts);
+
+        // Handle changes in excluded directories
+        this.handleDirectoryChanges(
+            oldExcludedDirectories,
+            this.excludedDirectories
+        );
+
+        // Handle changes in excluded file extensions
+        this.handleFileExtensionChanges(
+            oldExcludedFileExtensions,
+            this.excludedFileExtensions
+        );
+
+        // Listen for configuration changes
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (
+                event.affectsConfiguration("coducate.excludedDirectories") ||
+                event.affectsConfiguration("coducate.excludedFileExtensions")
+            ) {
+                this.loadSettings();
+            }
+        });
+    }
+
+    // Function to check if a file is excluded in settings
+    private isExcludedFile(filePath: string): boolean {
+        const normalizedPath = this.toPosixPath(filePath);
+        const fileExtension = path.extname(normalizedPath);
+        return this.excludedFileExtensions.has(fileExtension);
+    }
+
+    // Function to check if a directory is excluded in settings
+    private isExcludedDirectory(filePath: string): boolean {
+        const normalizedPath = this.toPosixPath(filePath);
+        const pathSegments = normalizedPath.split(path.posix.sep);
+        return pathSegments.some((segment) =>
+            this.excludedDirectories.has(segment)
+        );
+    }
+
     // Function to add an output to fileYMap
     public addOutputToYMap(outputFilePath: string, content: string) {
         const yText = new Y.Text();
@@ -551,8 +941,100 @@ export class SessionManager {
         }
     }
 
+    // Function to add all files with a specific extension to fileYMap
+    private async addFilesByExtension(extension: string) {
+        const workspaces = vscode.workspace.workspaceFolders;
+
+        if (!workspaces) {
+            return;
+        }
+
+        for (const workspace of workspaces) {
+            const files = await vscode.workspace.findFiles(
+                new vscode.RelativePattern(
+                    workspace.uri.fsPath,
+                    `**/*${extension}`
+                )
+            );
+
+            for (const file of files) {
+                const normalizedFilePath = this.toPosixPath(file.fsPath);
+                const relativeFilePath =
+                    this.getRelativeFilePath(normalizedFilePath);
+
+                if (
+                    !this.isExcludedDirectory(normalizedFilePath) &&
+                    !this.isExcludedFile(normalizedFilePath)
+                ) {
+                    const fileStat = await vscode.workspace.fs.stat(file);
+                    if (fileStat.type === vscode.FileType.File) {
+                        await this.addFileToYMap(
+                            normalizedFilePath,
+                            relativeFilePath
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Function to add all files within a directory to fileYMap
-    private async addAllFilesInDirectory(folderPath: string) {
+    private async addAllFilesInDirectory(dir: string) {
+        const workspaces = vscode.workspace.workspaceFolders;
+
+        if (!workspaces) {
+            return;
+        }
+
+        const filesToAdd: vscode.Uri[] = [];
+
+        for (const workspace of workspaces) {
+            const normalizedWorkspacePath = this.toPosixPath(
+                workspace.uri.fsPath
+            );
+
+            // Match files in the workspace folder or subdirectories containing `dir`
+            const pattern = `**/${dir}/**/*`;
+
+            const files = await vscode.workspace.findFiles(
+                new vscode.RelativePattern(workspace, pattern)
+            );
+
+            filesToAdd.push(...files);
+
+            // Check if the `dir` itself is the workspace root
+            if (normalizedWorkspacePath.endsWith(`/${dir}`)) {
+                // Search all files and directories directly within the `dir` workspace
+                const rootFiles = await vscode.workspace.findFiles(
+                    new vscode.RelativePattern(workspace, "**/*")
+                );
+
+                filesToAdd.push(...rootFiles);
+            }
+        }
+
+        for (const file of filesToAdd) {
+            const normalizedFilePath = this.toPosixPath(file.fsPath);
+            const relativeFilePath =
+                this.getRelativeFilePath(normalizedFilePath);
+
+            // Skip files in excluded directories or with excluded extensions
+            if (
+                this.isExcludedDirectory(normalizedFilePath) ||
+                this.isExcludedFile(normalizedFilePath)
+            ) {
+                continue;
+            }
+
+            const fileStat = await vscode.workspace.fs.stat(file);
+            if (fileStat.type === vscode.FileType.File) {
+                await this.addFileToYMap(normalizedFilePath, relativeFilePath);
+            }
+        }
+    }
+
+    // Function to add all files within a workspace folder to fileYMap
+    private async addAllFilesInWorkspaceFolder(folderPath: string) {
         const normalizedFolderPath = this.toPosixPath(folderPath);
 
         // Find all files in the created directory
@@ -566,7 +1048,10 @@ export class SessionManager {
                 this.getRelativeFilePath(normalizedFilePath);
 
             // Skip files in excluded directories
-            if (this.isExcludedDirectory(normalizedFilePath)) {
+            if (
+                this.isExcludedDirectory(normalizedFilePath) ||
+                this.isExcludedFile(normalizedFilePath)
+            ) {
                 continue;
             }
 
@@ -577,31 +1062,138 @@ export class SessionManager {
         }
     }
 
-    // Helper function to check if a file is within an excluded directory
-    private isExcludedDirectory(filePath: string): boolean {
-        const pathSegments = filePath.split(path.posix.sep);
-        return pathSegments.some((segment) =>
-            EXCLUDED_DIRECTORIES.has(segment)
-        );
-    }
-
-    // Helper function to check if a file has an excluded file extension
-    private isExcludedFile(filePath: string): boolean {
-        const fileExtension = path.extname(filePath);
-        return EXCLUDED_FILE_EXTENSIONS.has(fileExtension);
-    }
-
-    // Function to remove all files within a directory from fileYMap
-    private removeAllFilesInDirectory(folderName: string) {
-        const normalizedFolderName = this.toPosixPath(folderName);
+    // Function to remove all files with a specific extension from fileYMap
+    private async removeFilesByExtension(extension: string) {
+        const taskData = await this.requestTaskData(this.roomId);
         for (const key of Array.from(this.fileYMap.keys())) {
-            if (key.startsWith(`${normalizedFolderName}/`)) {
+            if (key.endsWith(extension)) {
+                if (key === taskData?.taskDescriptionPath) {
+                    vscode.window.showWarningMessage(
+                        `Cannot remove ${key} from synchronization. This file is used as the task description.`,
+                        "Ok"
+                    );
+                    continue;
+                } else if (key === taskData?.learningGoalsPath) {
+                    vscode.window.showWarningMessage(
+                        `Cannot remove ${key} from synchronization. This file is used as the learning goals.`,
+                        "Ok"
+                    );
+                    continue;
+                }
+
                 this.fileYMap.delete(key);
             }
         }
     }
 
-    // Method to handle renaming of files or directories with added safety checks
+    // Function to remove all files within a directory from fileYMap
+    private async removeAllFilesInDirectory(dir: string) {
+        const taskData = await this.requestTaskData(this.roomId);
+        for (const key of Array.from(this.fileYMap.keys())) {
+            if (
+                key.startsWith(`${dir}/`) ||
+                key.includes(`/${dir}/`) ||
+                key.endsWith(`/${dir}`)
+            ) {
+                if (key === taskData?.taskDescriptionPath) {
+                    vscode.window.showWarningMessage(
+                        `Cannot remove ${key} from synchronization. This file is used as the task description.`,
+                        "Ok"
+                    );
+                    continue;
+                } else if (key === taskData?.learningGoalsPath) {
+                    vscode.window.showWarningMessage(
+                        `Cannot remove ${key} from synchronization. This file is used as the learning goals.`,
+                        "Ok"
+                    );
+                    continue;
+                }
+
+                this.fileYMap.delete(key);
+            }
+        }
+    }
+
+    // Function to remove all files within a workspace folder from fileYMap
+    private async removeAllFilesInWorkspaceFolder(dir: string) {
+        for (const key of Array.from(this.fileYMap.keys())) {
+            if (key.startsWith(`${dir}/`)) {
+                this.fileYMap.delete(key);
+            }
+        }
+    }
+
+    /**
+     * Removes a value from a specified setting key (`excludedDirectories` or `excludedFileExtensions`).
+     * If the setting becomes empty and matches the default, it is reset to `undefined` to ensure VS Code properly reverts to default settings.
+     */
+    private async removeSettingValue(settingKey: string, value: string) {
+        const config = vscode.workspace.getConfiguration("coducate");
+
+        const settingValues = config.get<string[]>(settingKey, []);
+
+        if (!settingValues.includes(value)) {
+            return;
+        }
+
+        // Remove the value from the list
+        const updatedValues = settingValues.filter((v) => v !== value);
+
+        // Retrieve the default values dynamically using `inspect`
+        const defaultValues = this.getDefaultValuesFromInspect(
+            config,
+            settingKey
+        );
+
+        // Determine whether the setting exists in workspace or user settings
+        const configurationTarget = await this.getConfigurationTarget(
+            config,
+            settingKey
+        );
+
+        if (this.areArraysEqual(defaultValues, updatedValues)) {
+            // If the updated list matches the default values, reset to `undefined` (default values)
+            await config.update(settingKey, undefined, configurationTarget);
+        }
+    }
+
+    /**
+     * Determines whether a setting is stored in the workspace or user settings.
+     * Returns the appropriate `ConfigurationTarget` value.
+     */
+    private async getConfigurationTarget(
+        config: vscode.WorkspaceConfiguration,
+        settingKey: string
+    ): Promise<vscode.ConfigurationTarget> {
+        const workspaceValue = config.inspect(settingKey)?.workspaceValue;
+        return workspaceValue !== undefined
+            ? vscode.ConfigurationTarget.Workspace
+            : vscode.ConfigurationTarget.Global;
+    }
+
+    /**
+     * Retrieves the default values for a given setting using `inspect`.
+     */
+    private getDefaultValuesFromInspect(
+        config: vscode.WorkspaceConfiguration,
+        settingKey: string
+    ): string[] {
+        return config.inspect<string[]>(settingKey)?.defaultValue || [];
+    }
+
+    /**
+     * Checks if two arrays contain the same elements (ignoring order).
+     */
+    private areArraysEqual(array1: string[], array2: string[]): boolean {
+        if (array1.length !== array2.length) {
+            return false;
+        }
+        const sorted1 = [...array1].sort();
+        const sorted2 = [...array2].sort();
+        return sorted1.every((val, index) => val === sorted2[index]);
+    }
+
+    // Function to handle renaming of files or directories with added safety checks
     private async renameFileInYMap(
         oldRelativePath: string,
         newRelativePath: string
@@ -671,6 +1263,10 @@ export class SessionManager {
             }
         });
     }
+
+    /*
+     * Cleanup and Disposal
+     */
 
     public dispose() {
         // Prevent WebSocket reconnections
