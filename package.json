@@ -44,7 +44,14 @@
                         "out",
                         "tmp",
                         "logs",
-                        ".cache"
+                        ".cache",
+                        "__pycache__",
+                        ".DS_Store",
+                        ".idea",
+                        ".next",
+                        ".expo",
+                        "venv",
+                        "target"
                     ],
                     "description": "Directories to exclude from syncing."
                 },
@@ -54,6 +61,13 @@
                         "type": "string"
                     },
                     "default": [
+                        ".DS_Store",
+                        ".env",
+                        ".env.local",
+                        ".env.development",
+                        ".env.production",
+                        ".env.test",
+                        ".env.example",
                         ".ipynb"
                     ],
                     "description": "File extensions to exclude from syncing."
