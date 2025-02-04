@@ -9,16 +9,36 @@
         "color": "#1e1e1e",
         "theme": "dark"
     },
+    "homepage": "https://delta.peachhub-cntr1.inf.ethz.ch",
     "author": {
         "name": "Lukas Mast",
+        "email": "lukasmast07@gmail.com",
+        "url": "https://www.linkedin.com/in/lukas-mast/"
+    },
+    "maintainers": [
+        {
+            "name": "Lukas Mast",
+            "email": "lukasmast07@gmail.com",
+            "url": "https://www.linkedin.com/in/lukas-mast/"
+        }
+    ],
+    "bugs": {
         "email": "lukasmast07@gmail.com"
     },
-    "homepage": "https://delta.peachhub-cntr1.inf.ethz.ch",
     "engines": {
         "vscode": "^1.95.0"
     },
     "categories": [
-        "Other"
+        "Education"
+    ],
+    "keywords": [
+        "live coding",
+        "education",
+        "instructor-led",
+        "collaboration",
+        "code sharing",
+        "teaching",
+        "pair programming"
     ],
     "activationEvents": [
         "onStartupFinished"
