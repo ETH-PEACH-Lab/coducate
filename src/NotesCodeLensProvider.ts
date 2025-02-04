@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { showTmpNotification } from "./TmpNotification";
 
 interface Note {
     line: number;
@@ -89,22 +90,15 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             delete this.storedNotes[filePath];
             this.saveNotes();
             this.refresh();
-            if (noteCount === 1) {
-                vscode.window.showInformationMessage(
-                    `All notes removed from ${this.getRelativeFilePath(
-                        filePath
-                    )} (${noteCount} note).`
-                );
-            } else {
-                vscode.window.showInformationMessage(
-                    `All notes removed from ${this.getRelativeFilePath(
-                        filePath
-                    )} (${noteCount} notes).`
-                );
-            }
+
+            showTmpNotification(
+                `All notes removed from ${this.getRelativeFilePath(
+                    filePath
+                )} (${noteCount} note${noteCount === 1 ? "" : "s"}).`
+            );
         } else {
-            vscode.window.showInformationMessage(
-                "No notes found in the specified file."
+            showTmpNotification(
+                `No notes found in '${this.getRelativeFilePath(filePath)}'.`
             );
         }
     }
@@ -115,19 +109,13 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
             this.storedNotes = {};
             this.saveNotes();
             this.refresh();
-            if (noteCount === 1) {
-                vscode.window.showInformationMessage(
-                    `All notes removed from the workspace (${noteCount} file).`
-                );
-            } else {
-                vscode.window.showInformationMessage(
-                    `All notes removed from the workspace (${noteCount} files).`
-                );
-            }
-        } else {
-            vscode.window.showInformationMessage(
-                "No notes found in the workspace."
+            showTmpNotification(
+                `All notes removed from the workspace (${noteCount} file${
+                    noteCount === 1 ? "" : "s"
+                }).`
             );
+        } else {
+            showTmpNotification("No notes found in the workspace.");
         }
     }
 
@@ -191,7 +179,6 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
 
                     vscode.window.showWarningMessage(
                         "Conflict detected: Two notes cannot be on the same line. The last change has been undone.",
-                        { modal: false },
                         "Ok"
                     );
 

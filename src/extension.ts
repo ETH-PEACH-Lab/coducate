@@ -10,6 +10,7 @@ import {
 } from "unique-names-generator";
 import { SessionManager } from "./SessionManager";
 import { CaptureTerminal } from "./CaptureTerminal";
+import { showTmpNotification } from "./TmpNotification";
 
 const ROOM_ID_KEY = "coducateRoomId";
 
@@ -72,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         )
                         .then(
                             () => {
-                                vscode.window.showInformationMessage(
+                                showTmpNotification(
                                     "'diffEditor.codeLens' has been enabled."
                                 );
                             },
@@ -82,6 +83,11 @@ export async function activate(context: vscode.ExtensionContext) {
                                 );
                             }
                         );
+                } else {
+                    vscode.window.showWarningMessage(
+                        "You may not be able to accept/reject changes made by web clients in the diff editor view. You can enable 'diffEditor.codeLens' in the settings.",
+                        "Ok"
+                    );
                 }
             });
     }
@@ -289,18 +295,16 @@ async function initializeSession(
         }
     }
 
-    const showRoomIdMessage = (message: string) => {
-        vscode.window
-            .showInformationMessage(message, "Copy Room ID")
-            .then((selection) => {
-                if (selection === "Copy Room ID") {
-                    vscode.env.clipboard.writeText(roomId).then(() => {
-                        vscode.window.showInformationMessage(
-                            "Room ID copied to clipboard."
-                        );
-                    });
-                }
-            });
+    const showRoomIdMessage = async (message: string) => {
+        const copyToClipboard = await vscode.window.showInformationMessage(
+            message,
+            "Copy Room ID"
+        );
+
+        if (copyToClipboard === "Copy Room ID") {
+            await vscode.env.clipboard.writeText(roomId);
+            showTmpNotification("Room ID copied to clipboard.");
+        }
     };
 
     if (sessionType === SessionType.RESTORED_SESSION) {
@@ -455,7 +459,8 @@ function registerCommands(
             const sessionType = await vscode.window.showQuickPick(
                 ["New Session", "Existing Session"],
                 {
-                    placeHolder: "Choose session type. Press 'Esc' to cancel.",
+                    placeHolder:
+                        "Choose session type. (Press 'Escape' to cancel)",
                 }
             );
 
@@ -474,7 +479,7 @@ function registerCommands(
                         prompt:
                             sessionName && alreadyExistingSessions[sessionName]
                                 ? `The session name '${sessionName}' already exists. Enter a different name or use the Manage Sessions command to delete the existing session.`
-                                : "Enter an easy-to-remember session name. Press 'Esc' to cancel.",
+                                : "Enter an easy-to-remember session name.",
                         placeHolder: "E.g., 'Computer Systems Lecture 10'",
                     });
 
@@ -490,7 +495,7 @@ function registerCommands(
 
                 // Prompt user for a password
                 const password = await vscode.window.showInputBox({
-                    prompt: "Enter a password for this session. Press 'Esc' to cancel.",
+                    prompt: "Enter a password for this session.",
                     placeHolder:
                         "A password is required to secure the session.",
                     password: true,
@@ -512,7 +517,6 @@ function registerCommands(
                 );
 
                 if (taskDescriptionAction === undefined) {
-                    // vscode.window.showErrorMessage("Selection is required.");
                     return;
                 }
 
@@ -552,7 +556,6 @@ function registerCommands(
                 );
 
                 if (learningGoalsAction === undefined) {
-                    // vscode.window.showErrorMessage("Selection is required.");
                     return;
                 }
 
@@ -766,7 +769,7 @@ function registerCommands(
                     sessionChoices,
                     {
                         placeHolder:
-                            "Select an existing session. Press 'Esc' to cancel.",
+                            "Select an existing session. (Press 'Escape' to cancel)",
                     }
                 );
 
@@ -825,9 +828,7 @@ function registerCommands(
                 sessionManager = undefined;
                 await context.workspaceState.update(ROOM_ID_KEY, undefined);
 
-                vscode.window.showInformationMessage(
-                    "Live Coding Session ended."
-                );
+                showTmpNotification("Live Coding Session ended.");
 
                 // If the current workspace is non-existent, untitled or not created by Coducate, do nothing
                 if (
@@ -910,9 +911,7 @@ function registerCommands(
                 }>("coducate.sessions") || {};
 
             if (Object.keys(existingSessions).length === 0) {
-                vscode.window.showInformationMessage(
-                    "No sessions available to manage."
-                );
+                showTmpNotification("No sessions available to manage.");
                 return;
             }
 
@@ -926,9 +925,7 @@ function registerCommands(
                 );
 
                 if (sessionChoices.length === 0) {
-                    vscode.window.showInformationMessage(
-                        "All sessions have been deleted."
-                    );
+                    showTmpNotification("All sessions have been deleted.");
                     return;
                 }
 
@@ -936,7 +933,7 @@ function registerCommands(
                     sessionChoices,
                     {
                         placeHolder:
-                            "Select a session to manage. Press 'Esc' to cancel.",
+                            "Select a session to manage. (Press 'Escape' to cancel)",
                     }
                 );
 
@@ -949,7 +946,7 @@ function registerCommands(
                 const sessionActions = await vscode.window.showQuickPick(
                     ["Show password", "Rename Session", "Delete Session"],
                     {
-                        placeHolder: `What would you like to do with '${selectedSessionName}'? Press 'Esc' to cancel.`,
+                        placeHolder: `What would you like to do with '${selectedSessionName}'? (Press 'Escape' to cancel)`,
                     }
                 );
 
@@ -969,20 +966,18 @@ function registerCommands(
 
                     const copyToClipboard =
                         await vscode.window.showInformationMessage(
-                            `Password for '${selectedSessionName}': ${password}`,
-                            "Copy to Clipboard"
+                            `Password for '${selectedSessionName}': ${password}.`,
+                            "Copy Password"
                         );
 
-                    if (copyToClipboard === "Copy to Clipboard") {
+                    if (copyToClipboard === "Copy Password") {
                         await vscode.env.clipboard.writeText(password);
-                        vscode.window.showInformationMessage(
-                            "Password copied to clipboard."
-                        );
+                        showTmpNotification("Password copied to clipboard.");
                         return;
                     }
                 } else if (sessionActions === "Rename Session") {
                     const newSessionName = await vscode.window.showInputBox({
-                        prompt: `Enter a new name for the session '${selectedSessionName}'. Press 'Esc' to cancel.`,
+                        prompt: `Enter a new name for the session '${selectedSessionName}'.`,
                         placeHolder: "My New Session Name",
                         value: selectedSessionName,
                     });
@@ -1005,14 +1000,15 @@ function registerCommands(
                         "coducate.sessions",
                         existingSessions
                     );
-                    vscode.window.showInformationMessage(
+
+                    showTmpNotification(
                         `Session '${selectedSessionName}' renamed to '${newSessionName}'.`
                     );
                 } else if (sessionActions === "Delete Session") {
                     const confirmDelete = await vscode.window.showQuickPick(
                         ["Yes", "No"],
                         {
-                            placeHolder: `Are you sure you want to delete the session '${selectedSessionName}'? Press 'Esc' to cancel.`,
+                            placeHolder: `Are you sure you want to delete the session '${selectedSessionName}'? (Press 'Escape' to cancel)`,
                         }
                     );
 
@@ -1032,8 +1028,8 @@ function registerCommands(
                             existingSessions
                         );
 
-                        vscode.window.showInformationMessage(
-                            `Session '${selectedSessionName}' successfully deleted.`
+                        showTmpNotification(
+                            `Session '${selectedSessionName}' deleted.`
                         );
                     }
                 }
@@ -1053,7 +1049,7 @@ function registerCommands(
             }
 
             vscode.env.clipboard.writeText(roomId);
-            vscode.window.showInformationMessage("Room ID copied to clipboard");
+            showTmpNotification("Room ID copied to clipboard.");
         }
     );
 
@@ -1076,7 +1072,7 @@ function registerCommands(
                     ],
                     {
                         placeHolder:
-                            "Choose how to grant write access. Press 'Esc' to cancel.",
+                            "Choose how to grant write access. (Press 'Escape' to cancel)",
                     }
                 );
 
@@ -1114,7 +1110,7 @@ function registerCommands(
                     while (true) {
                         const targetSimpleID = await vscode.window.showInputBox(
                             {
-                                prompt: "Enter the client ID to grant write access. Press 'Esc' to cancel.",
+                                prompt: "Enter the client ID to grant write access.",
                                 placeHolder: "Enter client ID.",
                             }
                         );
@@ -1171,8 +1167,8 @@ function registerCommands(
                                     serializedMap
                                 );
 
-                                vscode.window.showInformationMessage(
-                                    `Write access granted to client ID: ${responseSimpleID}`
+                                showTmpNotification(
+                                    `Write access granted to client ID: ${responseSimpleID}.`
                                 );
                             } catch (error) {
                                 vscode.window.showErrorMessage(
@@ -1190,7 +1186,7 @@ function registerCommands(
                         ["Yes", "No"],
                         {
                             placeHolder:
-                                "Are you sure you want to grant write access to all clients? Press 'Esc' to cancel.",
+                                "Are you sure you want to grant write access to all clients? (Press 'Escape' to cancel)",
                         }
                     );
 
@@ -1237,7 +1233,7 @@ function registerCommands(
                                 serializedMap
                             );
 
-                            vscode.window.showInformationMessage(
+                            showTmpNotification(
                                 `Write access granted to all clients (${
                                     grantedClientIDs.length
                                 } client${
@@ -1291,9 +1287,7 @@ function registerCommands(
             const clientSet = roomAccessMap.get(roomId) || new Set();
 
             if (clientSet.size === 0) {
-                vscode.window.showInformationMessage(
-                    "No clients have write access."
-                );
+                showTmpNotification("No clients have write access.");
                 return;
             }
 
@@ -1305,7 +1299,7 @@ function registerCommands(
                 ],
                 {
                     placeHolder:
-                        "Choose how to revoke write access. Press 'Esc' to cancel.",
+                        "Choose how to revoke write access. (Press 'Escape' to cancel)",
                 }
             );
 
@@ -1335,7 +1329,7 @@ function registerCommands(
                         clientList,
                         {
                             placeHolder:
-                                "Choose a client ID to revoke write access. Press 'Esc' to cancel.",
+                                "Choose a client ID to revoke write access. (Press 'Escape' to cancel)",
                         }
                     );
 
@@ -1380,8 +1374,8 @@ function registerCommands(
                                 serializedMap
                             );
 
-                            vscode.window.showInformationMessage(
-                                `Write access revoked from client ID: ${responseSimpleID}`
+                            showTmpNotification(
+                                `Write access revoked from client ID: ${responseSimpleID}.`
                             );
                         }
                     } catch (error) {
@@ -1426,7 +1420,7 @@ function registerCommands(
                         serializedMap
                     );
 
-                    vscode.window.showInformationMessage(
+                    showTmpNotification(
                         `Write access revoked for all clients (${
                             clientSet.size
                         } client${clientSet.size === 1 ? "" : "s"}).`
@@ -1517,9 +1511,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Terminal successfully opened."
-                );
+                showTmpNotification("Terminal successfully opened.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1564,9 +1556,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Terminal successfully closed."
-                );
+                showTmpNotification("Terminal successfully closed.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1611,9 +1601,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Explorer successfully opened."
-                );
+                showTmpNotification("Explorer successfully opened.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1658,9 +1646,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Explorer successfully closed."
-                );
+                showTmpNotification("Explorer successfully closed.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1705,9 +1691,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Room ID successfully shown."
-                );
+                showTmpNotification("Room ID successfully shown.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1752,9 +1736,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
-                    "Room ID successfully hidden."
-                );
+                showTmpNotification("Room ID successfully hidden.");
             } catch (error) {
                 vscode.window.showErrorMessage(
                     error instanceof Error
@@ -1775,14 +1757,14 @@ function registerCommands(
                 return;
             }
 
-            // Create a persistent QuickPick panel
             const quickPick = vscode.window.createQuickPick();
             quickPick.items = [
                 { label: "Increase Font Size" },
                 { label: "Decrease Font Size" },
             ];
             quickPick.title = "Change Font Size";
-            quickPick.placeholder = "Select an action. Press 'Esc' to cancel.";
+            quickPick.placeholder =
+                "Select an action. (Press 'Escape' to cancel)";
             quickPick.buttons = [vscode.QuickInputButtons.Back];
 
             quickPick.onDidTriggerButton(() => {
@@ -1826,7 +1808,7 @@ function registerCommands(
                         }
                     );
 
-                    vscode.window.showInformationMessage(
+                    showTmpNotification(
                         `Font size successfully ${
                             increaseFontSize ? "increased" : "decreased"
                         }.`
@@ -1842,7 +1824,6 @@ function registerCommands(
                 }
             });
 
-            // Show the QuickPick
             quickPick.show();
         }
     );
@@ -1865,9 +1846,8 @@ function registerCommands(
                 return;
             }
 
-            // Prompt user to select theme
             const theme = await vscode.window.showQuickPick(["Dark", "Light"], {
-                placeHolder: "Select theme. Press 'Esc' to cancel.",
+                placeHolder: "Select theme. (Press 'Escape' to cancel)",
             });
 
             if (!theme) {
@@ -1894,7 +1874,7 @@ function registerCommands(
                     }
                 );
 
-                vscode.window.showInformationMessage(
+                showTmpNotification(
                     `Theme successfully changed to ${theme} mode.`
                 );
             } catch (error) {
@@ -1925,7 +1905,7 @@ function registerCommands(
 
                 if (!selection.isEmpty) {
                     const title = await vscode.window.showInputBox({
-                        prompt: "Enter a title for the note. Press 'Esc' to cancel.",
+                        prompt: "Enter a title for the note.",
                         placeHolder: "e.g., Check if user input is valid",
                     });
 
@@ -1964,8 +1944,8 @@ function registerCommands(
                         editBuilder.delete(fullLineRange);
                     });
 
-                    vscode.window.showInformationMessage(
-                        `Notes created at lines ${startLine + 1} to ${
+                    showTmpNotification(
+                        `Note created at lines ${startLine + 1} to ${
                             endLine + 1
                         }.`
                     );
@@ -2002,7 +1982,6 @@ function registerCommands(
                 return;
             }
 
-            // Prompt the user for an action
             const choice = await vscode.window.showQuickPick(
                 [
                     { label: "Insert at Cursor", value: "insert" },
@@ -2010,7 +1989,7 @@ function registerCommands(
                 ],
                 {
                     placeHolder:
-                        "What do you want to do with this note? Press 'Esc' to cancel.",
+                        "What do you want to do with this note? (Press 'Escape' to cancel)",
                 }
             );
 
@@ -2028,7 +2007,8 @@ function registerCommands(
                     editBuilder.insert(cursorLineStartPosition, note.code);
                 });
                 const numberOfLines = note.code.split("\n").length;
-                vscode.window.showInformationMessage(
+
+                showTmpNotification(
                     `Code restored at lines ${
                         cursorLineStartPosition.line + 1
                     } to ${cursorLineStartPosition.line + numberOfLines}.`
@@ -2036,7 +2016,7 @@ function registerCommands(
             } else if (choice.value === "delete") {
                 // Delete the note
                 notesCodeLensProvider?.removeNote(filePath, line);
-                vscode.window.showInformationMessage("Note deleted.");
+                showTmpNotification("Note at line " + (line + 1) + " deleted.");
             }
         }
     );
@@ -2069,7 +2049,7 @@ function registerCommands(
                 ],
                 {
                     placeHolder:
-                        "Choose which notes to remove. Press 'Esc' to cancel.",
+                        "Choose which notes to remove. (Press 'Escape' to cancel)",
                 }
             );
 
@@ -2104,8 +2084,9 @@ function registerCommands(
 
             const suggestionsEnabled =
                 inlineCompletionProvider?.toggleSuggestions();
-            vscode.window.showInformationMessage(
-                `Code suggestions ${
+
+            showTmpNotification(
+                `Note-based suggestions ${
                     suggestionsEnabled ? "enabled" : "disabled"
                 }.`
             );

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as Y from "yjs";
+import { showTmpNotification } from "./TmpNotification";
 
 export class DiffWatcher {
     private fileYMap: Y.Map<Y.Text>;
@@ -221,13 +222,13 @@ export class DiffWatcher {
     private async showDiffFiles() {
         const files = Array.from(this.diffFilesSet);
         if (files.length === 0) {
-            vscode.window.showInformationMessage("No differences found.");
+            showTmpNotification("No differences found.");
             return;
         }
 
         const selectedFile = await vscode.window.showQuickPick(files, {
             placeHolder:
-                "Select a file to view the diff. Press 'Esc' to cancel.",
+                "Select a file to view the diff. (Press 'Escape' to cancel)",
         });
 
         if (!selectedFile) {
@@ -412,9 +413,7 @@ export class DiffWatcher {
         // Automatically save the document after applying the changes
         await document.save();
 
-        vscode.window.showInformationMessage(
-            `Accepted changes for ${relativePath}`
-        );
+        showTmpNotification(`Accepted changes for ${relativePath}.`);
 
         // Remove the file from the diff set and save state
         this.diffFilesSet.delete(relativePath);
@@ -450,9 +449,7 @@ export class DiffWatcher {
         yText.delete(0, yText.length);
         yText.insert(0, document.getText());
 
-        vscode.window.showInformationMessage(
-            `Rejected changes for ${relativePath}`
-        );
+        showTmpNotification(`Rejected changes for ${relativePath}.`);
 
         // Remove the file from the diff set and save state
         this.diffFilesSet.delete(relativePath);

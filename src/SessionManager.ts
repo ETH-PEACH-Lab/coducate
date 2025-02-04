@@ -308,7 +308,7 @@ export class SessionManager {
                     this.diffWatcher.getDiffFilesSet().has(relativePath)
                 ) {
                     await vscode.window.showWarningMessage(
-                        `${relativePath} contains changes from clients. Please resolve these changes before editing the file.`,
+                        `'${relativePath}' contains changes from clients. Please resolve these changes before editing the file.`,
                         "Ok"
                     );
                 }
@@ -398,7 +398,7 @@ export class SessionManager {
                         vscode.window.showErrorMessage(
                             `Failed to send instructor file: ${
                                 (error as Error).message
-                            }`
+                            }.`
                         );
                     }
                 }
@@ -670,13 +670,13 @@ export class SessionManager {
      * @param {any} payload - The payload to send with the request.
      * @param {Object} [options={}] - Optional parameters for controlling request behavior.
      * @param {string} [options.responseType] - The expected response type (⚠️ Required if `waitForResponse` is `true`).
-     * @param {(payload: any) => boolean} [options.validateResponse=() => true] - Function to validate if the response matches expectations (defaults to always `true`).
-     * @param {string} [options.timeoutMessage='`requestType` request timed out'] - Custom error message if the request times out (defaults to '`requestType` request timed out').
-     * @param {number} [options.timeoutMs=5000] - Timeout duration in milliseconds (defaults to `5000ms`).
+     * @param {(payload: any) => boolean} [options.validateResponse=() => true] - Function to validate if the response matches expectations (default: `true`).
+     * @param {string} [options.timeoutMessage='`requestType` request timed out'] - Custom error message if the request times out (default: '`requestType` request timed out').
+     * @param {number} [options.timeoutMs=5000] - Timeout duration in milliseconds (default: `5000ms`).
      * @param {boolean} [options.waitForOpen=true] - If `true`, waits for WebSocket `"open"` event before sending (default: `true`).
      * @param {boolean} [options.waitForResponse=true] - If `false`, the function sends the request and resolves immediately without waiting for a response (default: `true`).
      *
-     * @returns {Promise<any>} - Resolves with the response payload if `waitForResponse` is `true`, otherwise resolves immediately after sending.
+     * @returns {Promise<any>} Resolves with the response payload if `waitForResponse` is `true`, otherwise resolves immediately after sending.
      *
      * @throws {Error} If `controlWebSocket` is `null` or not in an open state.
      * @throws {Error} If `waitForResponse` is `true` but `responseType` is not provided.
@@ -905,7 +905,7 @@ export class SessionManager {
                 if (fileHasExtension(file) && this.hasChangesTracked(file)) {
                     hasChanges = true;
                     await vscode.window.showWarningMessage(
-                        `${file} contains client changes. Please resolve these changes before excluding the file extension.`,
+                        `'${file}' contains client changes. Please resolve these changes before excluding '${ext}' files.`,
                         "Ok"
                     );
 
@@ -957,7 +957,7 @@ export class SessionManager {
                 ) {
                     hasChanges = true;
                     await vscode.window.showWarningMessage(
-                        `${dir} contains files with client changes. Please resolve these changes before excluding the directory.`,
+                        `'${dir}' contains files with client changes. Please resolve these changes before excluding the directory.`,
                         "Ok"
                     );
 
@@ -1190,13 +1190,13 @@ export class SessionManager {
             if (key.endsWith(extension)) {
                 if (key === taskData?.taskDescriptionPath) {
                     vscode.window.showWarningMessage(
-                        `Cannot remove ${key} from synchronization. This file is used as the task description.`,
+                        `Cannot remove '${key}' from synchronization. This file is used for the task description.`,
                         "Ok"
                     );
                     continue;
                 } else if (key === taskData?.learningGoalsPath) {
                     vscode.window.showWarningMessage(
-                        `Cannot remove ${key} from synchronization. This file is used as the learning goals.`,
+                        `Cannot remove '${key}' from synchronization. This file is used for the learning goals.`,
                         "Ok"
                     );
                     continue;
@@ -1218,13 +1218,13 @@ export class SessionManager {
             ) {
                 if (key === taskData?.taskDescriptionPath) {
                     vscode.window.showWarningMessage(
-                        `Cannot remove ${key} from synchronization. This file is used as the task description.`,
+                        `Cannot remove '${key}' from synchronization. This file is used for the task description.`,
                         "Ok"
                     );
                     continue;
                 } else if (key === taskData?.learningGoalsPath) {
                     vscode.window.showWarningMessage(
-                        `Cannot remove ${key} from synchronization. This file is used as the learning goals.`,
+                        `Cannot remove '${key}' from synchronization. This file is used for the learning goals.`,
                         "Ok"
                     );
                     continue;
