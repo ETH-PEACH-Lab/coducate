@@ -1,6 +1,6 @@
 # Coducate
 
-**Coducate** is a VS Code extension designed to streamline instructor-led live coding sessions. Whether you are teaching programming concepts, demonstrating coding techniques, or running an exercise class as a teaching assistant, Coducate provides all the necessary tools to make your live coding experience seamless and engaging.
+**Coducate** makes instructor-led live coding sessions more interactive, structured, and efficient. Whether you are teaching programming concepts, demonstrating coding techniques, or guiding participants through hands-on exercises, Coducate simplifies the process with powerful tools. It allows instructors to share their code in real-time, grant participants write access for interactive participation, and manage contributions with a built-in diff editor. Features like AI-powered code suggestions, terminal emulation, interactive notes, and a customizable **[web view](https://delta.peachhub-cntr1.inf.ethz.ch/)**—inspired by PowerPoint’s presentation mode—help create an engaging and structured learning environment. The web view **separates the instructor’s view from the participants’ view**, allowing instructors to maintain their preferred setup while participants access a distraction-free interface on any browser-accessible device. This also enables the use of in-editor notes and AI code suggestions without exposing them to participants.
 
 ## Features and Commands
 
