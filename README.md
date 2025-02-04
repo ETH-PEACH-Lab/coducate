@@ -2,8 +2,6 @@
 
 **Coducate** is a VS Code extension designed to streamline instructor-led live coding sessions. Whether you are teaching programming concepts, demonstrating coding techniques, or running an exercise class as a teaching assistant, Coducate provides all the necessary tools to make your live coding experience seamless and engaging.
 
----
-
 ## Features and Commands
 
 ### Start and End Live Sessions
@@ -118,6 +116,10 @@ Modify the web view appearance to create an optimal teaching environment, such a
 
     -   Open or close the file explorer in the instructor's web view.
 
+-   **Command:** `Coducate: Show Room ID` / `Coducate: Hide Room ID`
+
+    -   Display the room ID on full screen in the instructor's web view.
+
 -   **Command:** `Coducate: Change Font Size`
 
     -   Adjust the font size of the editor and the emulated terminal in the instructor's web view.
@@ -139,8 +141,6 @@ Set the task description and learning goals for your live coding session by sele
 
 ![Task Description and Learning Goals](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/task_description_learning_goals.gif)
 
----
-
 ## Requirements
 
 Coducate requires the following:
@@ -148,7 +148,52 @@ Coducate requires the following:
 -   **VS Code Version:** 1.95.0 or higher.
 -   **Internet Connection**
 
----
+## Settings
+
+Coducate includes the following settings. These can be set in user or workspace settings.
+
+The `coducate.excludedDirectories` setting is used to exclude directories from syncing. By default, the following directories are excluded:
+
+```json
+{
+    "coducate.excludedDirectories": [
+        "node_modules",
+        ".git",
+        "dist",
+        "build",
+        ".vscode",
+        "coverage",
+        "out",
+        "tmp",
+        "logs",
+        ".cache",
+        "__pycache__",
+        ".DS_Store",
+        ".idea",
+        ".next",
+        ".expo",
+        "venv",
+        "target"
+    ]
+}
+```
+
+The `coducate.excludedFileExtensions` setting is used to exclude files with specific extensions from syncing. By default, the following file extensions are excluded:
+
+```json
+{
+    "coducate.excludedFileExtensions": [
+        ".DS_Store",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        ".env.test",
+        ".env.example",
+        ".ipynb"
+    ]
+}
+```
 
 ## Keybindings
 
