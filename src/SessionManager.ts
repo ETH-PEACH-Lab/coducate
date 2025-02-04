@@ -35,12 +35,14 @@ export class SessionManager {
     private hasExecutedOpenTerminal: boolean = false;
     private notesCodeLensProvider: NotesCodeLensProvider;
     private inlineCompletionProvider: InlineCompletionProvider;
+    private status: vscode.StatusBarItem;
     private disposables: vscode.Disposable[] = [];
 
     constructor(
         urlYjs: string,
         urlControlWebsocket: string,
         roomId: string,
+        status: vscode.StatusBarItem,
         context: vscode.ExtensionContext
     ) {
         this.roomId = roomId;
@@ -52,6 +54,9 @@ export class SessionManager {
         // Bind methods
         this.toPosixPath = this.toPosixPath.bind(this);
         this.getRelativeFilePath = this.getRelativeFilePath.bind(this);
+
+        // Initialize the status bar
+        this.status = status;
 
         // Initialize the control WebSocket
         this.urlControlWebsocket = urlControlWebsocket;
@@ -157,26 +162,45 @@ export class SessionManager {
         this.controlWebSocket = new WebSocket(
             this.urlControlWebsocket
         ) as CustomWebSocket;
-
         const ws = this.controlWebSocket;
 
-        ws.onopen = () => {
+        // WebSocket open event
+        const handleOpen = () => {
             this.reconnectAttempts = 0; // Reset reconnect attempts
             if (ws.pingTimeout) {
                 clearTimeout(ws.pingTimeout);
             }
+
+            // Set status bar to synchronized
+            this.status.text = "$(sync) Coducate";
+            this.status.tooltip = this.roomId;
+            this.status.command = {
+                title: "Copy Room ID",
+                command: "coducate.copyRoomId",
+                arguments: [this.roomId],
+            };
         };
 
-        ws.onclose = () => {
+        // WebSocket close event
+        const handleClose = () => {
             if (ws.pingTimeout) {
                 clearTimeout(ws.pingTimeout);
             }
+
+            // Remove all event listeners before reconnecting
+            ws.removeEventListener("open", handleOpen);
+            ws.removeEventListener("close", handleClose);
+            ws.removeEventListener("error", handleError);
+
+            // Set status bar to not synchronized
+            this.status.text = "$(sync-ignored) Coducate";
+
             this.scheduleReconnect();
         };
 
-        ws.onerror = () => {
+        // WebSocket error event
+        const handleError = () => {
             ws.close();
-            this.scheduleReconnect();
         };
 
         // Heartbeat handling
@@ -185,15 +209,25 @@ export class SessionManager {
                 clearTimeout(ws.pingTimeout);
             }
 
-            // Set a timeout to terminate the connection if no ping is received
+            // Terminate WebSocket if no ping is received
             ws.pingTimeout = setTimeout(() => {
+                console.warn(
+                    "WebSocket heartbeat timeout, terminating connection."
+                );
                 ws.terminate();
             }, 30000 + 1000); // 30 seconds (ping interval) + 1 second buffer
         };
 
-        this.controlWebSocket.on("ping", heartbeat);
+        // Attach event listeners
+        ws.addEventListener("open", handleOpen);
+        ws.addEventListener("close", handleClose);
+        ws.addEventListener("error", handleError);
+        ws.on("ping", heartbeat);
     }
 
+    /**
+     * Handles WebSocket reconnection with exponential backoff.
+     */
     private scheduleReconnect() {
         if (!this.shouldConnect) {
             return;
@@ -629,99 +663,186 @@ export class SessionManager {
     }
 
     /**
-     * Sends a WebSocket request and waits for a response.
+     * Sends a WebSocket request and optionally waits for a response.
+     *
      * @param {WebSocket} controlWebSocket - The WebSocket connection.
      * @param {string} requestType - The type of request to send.
-     * @param {string} responseType - The expected response type.
      * @param {any} payload - The payload to send with the request.
-     * @param {(payload: any) => boolean} validateResponse - Function to validate if the response matches expectations.
-     * @param {number} timeoutMs - Timeout duration in milliseconds (default 5000ms).
-     * @param {string} timeoutMessage - Custom message to display if the request times out.
-     * @returns {Promise<any>} - Resolves with the response payload or rejects with an error.
+     * @param {Object} [options={}] - Optional parameters for controlling request behavior.
+     * @param {string} [options.responseType] - The expected response type (⚠️ Required if `waitForResponse` is `true`).
+     * @param {(payload: any) => boolean} [options.validateResponse=() => true] - Function to validate if the response matches expectations (defaults to always `true`).
+     * @param {string} [options.timeoutMessage='`requestType` request timed out'] - Custom error message if the request times out (defaults to '`requestType` request timed out').
+     * @param {number} [options.timeoutMs=5000] - Timeout duration in milliseconds (defaults to `5000ms`).
+     * @param {boolean} [options.waitForOpen=true] - If `true`, waits for WebSocket `"open"` event before sending (default: `true`).
+     * @param {boolean} [options.waitForResponse=true] - If `false`, the function sends the request and resolves immediately without waiting for a response (default: `true`).
+     *
+     * @returns {Promise<any>} - Resolves with the response payload if `waitForResponse` is `true`, otherwise resolves immediately after sending.
+     *
+     * @throws {Error} If `controlWebSocket` is `null` or not in an open state.
+     * @throws {Error} If `waitForResponse` is `true` but `responseType` is not provided.
+     * @throws {Error} If the request fails to send or times out.
      */
     public sendWebSocketRequest = async (
         controlWebSocket: WebSocket,
         requestType: string,
-        responseType: string,
         payload: any,
-        validateResponse: (payload: any) => boolean,
-        timeoutMs: number = 5000,
-        timeoutMessage?: string
+        options: {
+            responseType?: string;
+            validateResponse?: (payload: any) => boolean;
+            timeoutMessage?: string;
+            timeoutMs?: number;
+            waitForOpen?: boolean;
+            waitForResponse?: boolean;
+        } = {} // Default empty object
     ): Promise<any> => {
         return new Promise((resolve, reject) => {
-            if (
-                !controlWebSocket ||
-                controlWebSocket.readyState !== WebSocket.OPEN
-            ) {
+            if (!controlWebSocket) {
                 return reject(new Error("WebSocket connection not available."));
             }
 
-            let timeout: NodeJS.Timeout | undefined;
+            const {
+                responseType,
+                validateResponse = () => true,
+                timeoutMessage = undefined,
+                timeoutMs = 5000,
+                waitForOpen = true,
+                waitForResponse = true,
+            } = options;
 
-            const handleServerResponse = (event: any) => {
-                try {
-                    // Convert event.data to a string if needed
-                    const message =
-                        typeof event.data === "string"
-                            ? event.data
-                            : event.data.toString();
-
-                    const { type, payload: responsePayload } =
-                        JSON.parse(message);
-                    if (
-                        type === responseType &&
-                        validateResponse(responsePayload)
-                    ) {
-                        cleanup();
-                        resolve(responsePayload);
-                    }
-                } catch (error) {
-                    console.error(
-                        `Invalid JSON from WebSocket (${responseType}):`,
-                        error
-                    );
-                }
-            };
-
-            const cleanup = () => {
-                if (timeout) {
-                    clearTimeout(timeout);
-                }
-                controlWebSocket.removeEventListener(
-                    "message",
-                    handleServerResponse
-                );
-            };
-
-            // Attach event listener for the response
-            controlWebSocket.addEventListener("message", handleServerResponse);
-
-            // Send the request
-            try {
-                controlWebSocket.send(
-                    JSON.stringify({
-                        type: requestType,
-                        payload,
-                    })
-                );
-            } catch (error) {
-                cleanup();
+            if (waitForResponse && !responseType) {
                 return reject(
                     new Error(
-                        `Failed to send request: ${(error as Error).message}`
+                        "responseType is required when waiting for a response."
                     )
                 );
             }
 
-            // Set a timeout in case of no response
-            timeout = setTimeout(() => {
-                cleanup();
-                reject(
-                    timeoutMessage
-                        ? timeoutMessage
-                        : new Error(`${requestType} request timed out`)
+            const sendRequest = () => {
+                try {
+                    controlWebSocket.send(
+                        JSON.stringify({
+                            type: requestType,
+                            payload,
+                        })
+                    );
+
+                    if (!waitForResponse) {
+                        return resolve(
+                            "Request sent successfully (no response expected)."
+                        );
+                    }
+                } catch (error) {
+                    return reject(
+                        new Error(
+                            `Failed to send request: ${
+                                (error as Error).message
+                            }`
+                        )
+                    );
+                }
+
+                let timeout: NodeJS.Timeout | undefined;
+
+                const handleServerResponse = (event: any) => {
+                    try {
+                        const message =
+                            typeof event.data === "string"
+                                ? event.data
+                                : event.data.toString();
+                        const { type, payload: responsePayload } =
+                            JSON.parse(message);
+
+                        if (
+                            type === responseType &&
+                            validateResponse(responsePayload)
+                        ) {
+                            cleanup();
+                            resolve(responsePayload);
+                        }
+                    } catch (error) {
+                        cleanup();
+                        reject(
+                            new Error(
+                                `Invalid JSON from WebSocket (${responseType}): ${
+                                    (error as Error).message
+                                }`
+                            )
+                        );
+                    }
+                };
+
+                const cleanup = () => {
+                    if (timeout) {
+                        clearTimeout(timeout);
+                    }
+                    controlWebSocket.removeEventListener(
+                        "message",
+                        handleServerResponse
+                    );
+                };
+
+                controlWebSocket.addEventListener(
+                    "message",
+                    handleServerResponse
                 );
-            }, timeoutMs);
+
+                // Set a timeout for response
+                timeout = setTimeout(() => {
+                    cleanup();
+                    reject(
+                        new Error(
+                            timeoutMessage || `${requestType} request timed out`
+                        )
+                    );
+                }, timeoutMs);
+            };
+
+            // Handle WebSocket connection states
+            switch (controlWebSocket.readyState) {
+                case WebSocket.OPEN:
+                    sendRequest();
+                    break;
+
+                case WebSocket.CONNECTING:
+                    if (waitForOpen) {
+                        const handleOpen = () => {
+                            sendRequest();
+                            controlWebSocket.removeEventListener(
+                                "open",
+                                handleOpen
+                            );
+                        };
+                        controlWebSocket.addEventListener("open", handleOpen, {
+                            once: true,
+                        });
+                    } else {
+                        reject(
+                            new Error(
+                                "WebSocket is still connecting. Please wait and try again."
+                            )
+                        );
+                    }
+                    break;
+
+                case WebSocket.CLOSING:
+                    reject(
+                        new Error(
+                            "WebSocket is closing. Wait for it to reconnect."
+                        )
+                    );
+                    break;
+
+                case WebSocket.CLOSED:
+                    reject(
+                        new Error(
+                            "WebSocket connection was closed. Try restarting the session."
+                        )
+                    );
+                    break;
+
+                default:
+                    reject(new Error("WebSocket connection not available."));
+            }
         });
     };
 
