@@ -1,5 +1,11 @@
 # Change Log
 
+## [0.4.1] - 2025-02-05
+
+### Changed
+
+-   Information messages now automatically disappear after five seconds. This makes them less distracting and reduces interruptions, as users no longer need to manually dismiss them.
+
 ## [0.4.0] - 2025-02-04
 
 ### Added
