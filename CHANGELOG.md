@@ -1,5 +1,22 @@
 # Change Log
 
+## [0.4.0] - 2025-02-04
+
+### Added
+
+-   Introduced extension settings for excluding specific directories and file extensions from syncing. The extension supports both user and workspace settings.
+-   Added commands to toggle the room ID display, showing it large on full screen for better readability on the instructor's projection. It can also be toggled by clicking on the room ID in the web view.
+
+### Changed
+
+-   Enforced multi-root workspace within the same VS Code window, ensuring a more seamless workflow. This prevents the instructor from accidentally coding in the wrong VS Code window.
+-   Improved the command prompts by adding clear cancellation instructions, enhancing the user experience.
+-   Enhanced Coducate's web view by making pop-ups closable by clicking outside the pop-up window.
+
+### Fixed
+
+-   Fixed a bug where the extension indicated that WebSockets were connected even when the connection was lost.
+
 ## [0.3.1] - 2025-01-16
 
 ### Added
