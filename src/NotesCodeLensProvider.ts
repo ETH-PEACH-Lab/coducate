@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { showTmpNotification } from "./TmpNotification";
+import { showTmpNotification } from "./tmpNotifications";
 
 interface Note {
     line: number;

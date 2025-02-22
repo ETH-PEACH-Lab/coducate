@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as Y from "yjs";
-import { showTmpNotification } from "./TmpNotification";
+import { showTmpNotification } from "./tmpNotifications";
 
 export class DiffWatcher {
     private fileYMap: Y.Map<Y.Text>;
