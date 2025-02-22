@@ -1,32 +1,31 @@
 import * as vscode from "vscode";
+import ReconnectingWebSocket from "reconnecting-websocket";
+import { WebSocket } from "ws";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 import path from "path";
 import * as fs from "fs";
-import { Awareness } from "y-protocols/awareness";
 import * as os from "os";
-import { WebSocket } from "ws";
 import { DiffWatcher } from "./DiffWatcher";
 import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
 import { InlineCompletionProvider } from "./InlineCompletionProvider";
+import { IS_PRODUCTION } from "./extension";
 
-// Extend WebSocket interface to include custom properties
-interface CustomWebSocket extends WebSocket {
-    isAlive?: boolean;
-    pingTimeout?: NodeJS.Timeout;
-    roomId?: string;
-}
+// Define WebSocket protocol and host
+const webSocketProtocol = IS_PRODUCTION ? "wss:" : "ws:";
+const webSocketHost = IS_PRODUCTION
+    ? "delta.peachhub-cntr1.inf.ethz.ch"
+    : "localhost:1234";
+
+// Define WebSocket URLs
+const yjsWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/yjs`;
+const controlWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/control`;
 
 export class SessionManager {
+    private wsControl: ReconnectingWebSocket;
     private provider: WebsocketProvider;
-    private controlWebSocket: CustomWebSocket | null = null;
-    private urlControlWebsocket: string;
-    private reconnectAttempts: number = 0;
-    private maxBackoffTime: number = 2500; // Maximum backoff time in milliseconds
-    private shouldConnect: boolean = true; // Flag to manage connection state
     private roomId: string;
     private yDoc: Y.Doc;
-    private awareness: Awareness;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
     private excludedDirectories: Set<string> = new Set();
     private excludedFileExtensions: Set<string> = new Set();
@@ -37,18 +36,33 @@ export class SessionManager {
     private inlineCompletionProvider: InlineCompletionProvider;
     private status: vscode.StatusBarItem;
     private disposables: vscode.Disposable[] = [];
+    private isFlushing = false; // Flag to prevent multiple flushes
+    private pendingRequests: Array<() => void> = []; // Store requests that are waiting for WebSocket to open
+    private pendingResponses: Record<
+        string,
+        Record<string, Array<(data: any) => void>>
+    > = {}; // Store pending responses for each roomId and responseType
 
     constructor(
-        urlYjs: string,
-        urlControlWebsocket: string,
         roomId: string,
         status: vscode.StatusBarItem,
         context: vscode.ExtensionContext
     ) {
         this.roomId = roomId;
         this.yDoc = new Y.Doc();
-        this.provider = new WebsocketProvider(urlYjs, roomId, this.yDoc, {
-            WebSocketPolyfill: require("ws"),
+        this.provider = new WebsocketProvider(
+            yjsWebSocketUrl,
+            roomId,
+            this.yDoc,
+            {
+                WebSocketPolyfill: require("ws"),
+            }
+        );
+
+        // Separate WebSocket for custom messages
+        const bcChannelControlUrl = controlWebSocketUrl + "/" + roomId;
+        this.wsControl = new ReconnectingWebSocket(bcChannelControlUrl, [], {
+            WebSocket: WebSocket,
         });
 
         // Bind methods
@@ -58,12 +72,8 @@ export class SessionManager {
         // Initialize the status bar
         this.status = status;
 
-        // Initialize the control WebSocket
-        this.urlControlWebsocket = urlControlWebsocket;
-        this.initializeControlWebSocket();
-
-        // Initialize awareness for the provider
-        this.awareness = this.provider.awareness;
+        // Add WebSocket event listeners
+        this.addWebSocketListeners();
 
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
@@ -122,16 +132,8 @@ export class SessionManager {
         return this.provider;
     }
 
-    public getAwareness() {
-        return this.awareness;
-    }
-
     public getFileYMap() {
         return this.fileYMap;
-    }
-
-    public getControlWebSocket() {
-        return this.controlWebSocket;
     }
 
     public getRoomId() {
@@ -150,27 +152,8 @@ export class SessionManager {
         return filePath.replace(/\\/g, "/");
     }
 
-    /*
-     * WebSocket connection management
-     */
-
-    private initializeControlWebSocket() {
-        if (!this.shouldConnect) {
-            return;
-        }
-
-        this.controlWebSocket = new WebSocket(
-            this.urlControlWebsocket
-        ) as CustomWebSocket;
-        const ws = this.controlWebSocket;
-
-        // WebSocket open event
+    private addWebSocketListeners() {
         const handleOpen = () => {
-            this.reconnectAttempts = 0; // Reset reconnect attempts
-            if (ws.pingTimeout) {
-                clearTimeout(ws.pingTimeout);
-            }
-
             // Set status bar to synchronized
             this.status.text = "$(sync) Coducate";
             this.status.tooltip = this.roomId;
@@ -181,68 +164,237 @@ export class SessionManager {
             };
         };
 
-        // WebSocket close event
         const handleClose = () => {
-            if (ws.pingTimeout) {
-                clearTimeout(ws.pingTimeout);
-            }
-
-            // Remove all event listeners before reconnecting
-            ws.removeEventListener("open", handleOpen);
-            ws.removeEventListener("close", handleClose);
-            ws.removeEventListener("error", handleError);
-
             // Set status bar to not synchronized
-            this.status.text = "$(sync-ignored) Coducate";
-
-            this.scheduleReconnect();
+            this.status.text = "$(debug-disconnect) Coducate";
         };
 
-        // WebSocket error event
         const handleError = () => {
-            ws.close();
+            // Set status bar to not synchronized
+            this.status.text = "$(debug-disconnect) Coducate";
         };
 
-        // Heartbeat handling
-        const heartbeat = () => {
-            if (ws.pingTimeout) {
-                clearTimeout(ws.pingTimeout);
-            }
+        const handleMessage = (event: MessageEvent) => {
+            try {
+                const { type: responseType, payload } = JSON.parse(event.data);
 
-            // Terminate WebSocket if no ping is received
-            ws.pingTimeout = setTimeout(() => {
-                console.warn(
-                    "WebSocket heartbeat timeout, terminating connection."
+                // Ensure we have a roomId in the payload
+                const roomId = payload?.roomId;
+                if (!roomId) {
+                    return;
+                }
+                // Check if there are any pending requests for this roomId and responseType
+                if (
+                    !this.pendingResponses[roomId] ||
+                    !this.pendingResponses[roomId][responseType]
+                ) {
+                    return;
+                }
+
+                // Resolve ALL pending requests for this roomId & responseType
+                this.pendingResponses[roomId][responseType].forEach(
+                    (resolve) => {
+                        resolve(payload);
+                    }
                 );
-                ws.terminate();
-            }, 30000 + 1000); // 30 seconds (ping interval) + 1 second buffer
+                // Cleanup: Remove responseType after resolving all requests
+                delete this.pendingResponses[roomId][responseType];
+                // Cleanup: Remove roomId if no more pending messages
+                if (Object.keys(this.pendingResponses[roomId]).length === 0) {
+                    delete this.pendingResponses[roomId];
+                }
+            } catch (error) {
+                console.error("Error processing WebSocket message:", error);
+            }
         };
 
-        // Attach event listeners
-        ws.addEventListener("open", handleOpen);
-        ws.addEventListener("close", handleClose);
-        ws.addEventListener("error", handleError);
-        ws.on("ping", heartbeat);
+        this.wsControl.addEventListener("open", handleOpen);
+        this.wsControl.addEventListener("close", handleClose);
+        this.wsControl.addEventListener("error", handleError);
+        this.wsControl.addEventListener("message", handleMessage);
     }
 
     /**
-     * Handles WebSocket reconnection with exponential backoff.
+     * Sends a WebSocket request and optionally waits for a response.
+     *
+     * @param {string} requestType - The type of request to send.
+     * @param {any} payload - The payload to send with the request.
+     * @param {Object} [options={}] - Optional parameters for controlling request behavior.
+     * @param {string} [options.responseType] - The expected response type (⚠️ Required if `waitForResponse` is `true`).
+     * @param {(payload: any) => boolean} [options.validateResponse=() => true] - Function to validate if the response matches expectations.
+     * @param {string} [options.timeoutMessage='Request timed out'] - Custom error message if the request times out.
+     * @param {number} [options.timeoutMs=5000] - Timeout duration in milliseconds.
+     * @param {boolean} [options.waitForOpen=true] - If `true`, waits for WebSocket `"open"` event before sending.
+     * @param {boolean} [options.waitForResponse=true] - If `false`, resolves immediately after sending the request.
+     *
+     * @returns {Promise<any>} Resolves with the response payload if `waitForResponse` is `true`, otherwise resolves immediately.
+     *
+     * @throws {Error} If `webSocket` is `null` or not in an open state.
+     * @throws {Error} If `waitForResponse` is `true` but `responseType` is missing.
+     * @throws {Error} If the request fails to send or times out.
      */
-    private scheduleReconnect() {
-        if (!this.shouldConnect) {
-            return;
-        }
+    public sendWebSocketRequest = async (
+        requestType: string,
+        payload: any,
+        options: {
+            responseType?: string;
+            validateResponse?: (payload: any) => boolean;
+            timeoutMessage?: string;
+            timeoutMs?: number;
+            waitForOpen?: boolean;
+            waitForResponse?: boolean;
+        } = {}
+    ): Promise<any> => {
+        return new Promise((resolve, reject) => {
+            const {
+                responseType,
+                validateResponse = () => true,
+                timeoutMessage = `${requestType} request timed out`,
+                timeoutMs = 5000,
+                waitForOpen = true,
+                waitForResponse = true,
+            } = options;
 
-        const backoffTime = Math.min(
-            Math.pow(2, this.reconnectAttempts) * 100,
-            this.maxBackoffTime
-        );
+            if (waitForResponse && !responseType) {
+                return reject(
+                    new Error(
+                        "responseType is required when waiting for a response."
+                    )
+                );
+            }
 
-        setTimeout(() => {
-            this.reconnectAttempts++;
-            this.initializeControlWebSocket();
-        }, backoffTime);
-    }
+            // Extract roomId from payload (Assumes roomId is inside the payload)
+            const roomId = payload?.roomId;
+            if (!roomId) {
+                return reject(new Error("roomId is required in the payload."));
+            }
+
+            const sendRequest = () => {
+                try {
+                    this.wsControl.send(
+                        JSON.stringify({
+                            type: requestType,
+                            payload,
+                        })
+                    );
+
+                    if (!waitForResponse) {
+                        return resolve(
+                            "Request sent successfully (no response expected)."
+                        );
+                    }
+                } catch (error) {
+                    return reject(
+                        new Error(`Failed to send request: ${error}`)
+                    );
+                }
+
+                // Store the request in the pendingResponses map under roomId and responseType
+                if (!this.pendingResponses[roomId]) {
+                    this.pendingResponses[roomId] = {};
+                }
+                if (!this.pendingResponses[roomId][responseType!]) {
+                    this.pendingResponses[roomId][responseType!] = [];
+                }
+
+                // Push the resolver function into the queue for this roomId & responseType
+                this.pendingResponses[roomId][responseType!].push(
+                    (responseData: any) => {
+                        if (validateResponse(responseData)) {
+                            resolve(responseData);
+                        } else {
+                            reject(new Error("Response validation failed."));
+                        }
+                    }
+                );
+
+                // Set timeout for this specific request
+                setTimeout(() => {
+                    if (
+                        this.pendingResponses[roomId]?.[responseType!]?.length >
+                        0
+                    ) {
+                        // Reject all pending requests if timed out
+                        this.pendingResponses[roomId][responseType!].forEach(
+                            () => reject(new Error(timeoutMessage))
+                        );
+
+                        // Cleanup: Remove responseType if no more pending requests
+                        delete this.pendingResponses[roomId][responseType!];
+
+                        // Cleanup: Remove roomId if no more pending messages
+                        if (
+                            Object.keys(this.pendingResponses[roomId])
+                                .length === 0
+                        ) {
+                            delete this.pendingResponses[roomId];
+                        }
+                    }
+                }, timeoutMs);
+            };
+
+            // Handle WebSocket connection states
+            switch (this.wsControl.readyState) {
+                case ReconnectingWebSocket.OPEN:
+                    sendRequest();
+                    break;
+
+                case ReconnectingWebSocket.CONNECTING:
+                    if (waitForOpen) {
+                        // Store the request in pendingRequests for later execution
+                        this.pendingRequests.push(sendRequest);
+
+                        // Ensure only one "open" listener is added
+                        if (!this.isFlushing) {
+                            this.isFlushing = true;
+
+                            const handleOpen = () => {
+                                setTimeout(() => {
+                                    // Flush all pending requests
+                                    this.pendingRequests.forEach((req) =>
+                                        req()
+                                    );
+                                    this.pendingRequests = []; // Clear queue after sending
+                                    this.wsControl.removeEventListener(
+                                        "open",
+                                        handleOpen
+                                    );
+                                    this.isFlushing = false; // Reset flag
+                                }, 100); // Delay to ensure WebSocket is fully open
+                            };
+
+                            this.wsControl.addEventListener("open", handleOpen);
+                        }
+                    } else {
+                        reject(
+                            new Error(
+                                "WebSocket is still connecting. Please wait and try again."
+                            )
+                        );
+                    }
+                    break;
+
+                case ReconnectingWebSocket.CLOSING:
+                    reject(
+                        new Error(
+                            "WebSocket is closing. Wait for it to reconnect."
+                        )
+                    );
+                    break;
+
+                case ReconnectingWebSocket.CLOSED:
+                    reject(
+                        new Error(
+                            "WebSocket connection was closed. Try restarting the session."
+                        )
+                    );
+                    break;
+
+                default:
+                    reject(new Error("WebSocket connection not available."));
+            }
+        });
+    };
 
     /*
      * VSCode event listeners
@@ -345,12 +497,15 @@ export class SessionManager {
                         },
                     },
                 };
-                this.awareness.setLocalStateField("vsCodeClient", clientState);
+                this.provider.awareness.setLocalStateField(
+                    "vsCodeClient",
+                    clientState
+                );
             }
         });
 
         // Listen for active editor changes (e.g., when a different file is opened)
-        vscode.window.onDidChangeActiveTextEditor((editor) => {
+        vscode.window.onDidChangeActiveTextEditor(async (editor) => {
             if (editor) {
                 const relativeFilePath = this.getRelativeFilePath(
                     editor.document.fileName
@@ -374,31 +529,29 @@ export class SessionManager {
                         },
                     },
                 };
-                this.awareness.setLocalStateField("vsCodeClient", clientState);
+                this.provider.awareness.setLocalStateField(
+                    "vsCodeClient",
+                    clientState
+                );
 
                 // Send the instructor file name to the server
-                if (
-                    this.controlWebSocket &&
-                    this.controlWebSocket.readyState === WebSocket.OPEN &&
-                    relativeFilePath &&
-                    this.fileYMap.has(relativeFilePath)
-                ) {
+                if (relativeFilePath && this.fileYMap.has(relativeFilePath)) {
                     try {
-                        // Send the instructor file name to the server
-                        this.controlWebSocket.send(
-                            JSON.stringify({
-                                type: "set_instructor_file_request",
-                                payload: {
-                                    roomId: this.roomId,
-                                    instructorFile: relativeFilePath,
-                                },
-                            })
+                        await this.sendWebSocketRequest(
+                            "set_instructor_file_request",
+                            {
+                                roomId: this.roomId,
+                                instructorFile: relativeFilePath,
+                            },
+                            {
+                                waitForResponse: false, // Send-and-forget (no response expected)
+                            }
                         );
                     } catch (error) {
                         vscode.window.showErrorMessage(
-                            `Failed to send instructor file: ${
-                                (error as Error).message
-                            }.`
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
                         );
                     }
                 }
@@ -464,6 +617,16 @@ export class SessionManager {
             // Request the terminal to close
             vscode.commands.executeCommand("coducate.closeTerminal");
             this.hasExecutedOpenTerminal = false;
+        });
+
+        // Listen for configuration changes
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (
+                event.affectsConfiguration("coducate.excludedDirectories") ||
+                event.affectsConfiguration("coducate.excludedFileExtensions")
+            ) {
+                this.loadSettings();
+            }
         });
     }
 
@@ -551,301 +714,6 @@ export class SessionManager {
      * Settings and File Management
      */
 
-    // Function to request the task description and learning goals paths from the server
-    public async requestTaskData(roomId: string) {
-        let taskData: {
-            taskDescriptionPath: string;
-            learningGoalsPath: string;
-        } = {
-            taskDescriptionPath: "",
-            learningGoalsPath: "",
-        };
-
-        const getTaskDataResponse = async () => {
-            return new Promise<boolean>((resolve, reject) => {
-                if (!this.controlWebSocket) {
-                    return reject(
-                        new Error("WebSocket connection not available.")
-                    );
-                }
-
-                let timeout: NodeJS.Timeout | undefined;
-
-                // Define a unique message event handler
-                const handleServerResponse = (event: any) => {
-                    try {
-                        const message =
-                            typeof event.data === "string"
-                                ? event.data
-                                : event.toString();
-                        const { type, payload } = JSON.parse(message);
-
-                        if (
-                            type === "get_task_data_response" &&
-                            payload.roomId === roomId
-                        ) {
-                            taskData.taskDescriptionPath =
-                                payload.taskDescriptionPath;
-                            taskData.learningGoalsPath =
-                                payload.learningGoalsPath;
-                            resolve(true);
-                        }
-                    } catch (error) {
-                        reject(
-                            new Error("Invalid response format from server.")
-                        );
-                    } finally {
-                        cleanup();
-                    }
-                };
-
-                // Cleanup function for timeout and event listener
-                const cleanup = () => {
-                    if (timeout) {
-                        clearTimeout(timeout);
-                    }
-                    this.controlWebSocket?.removeEventListener(
-                        "message",
-                        handleServerResponse
-                    );
-                };
-
-                // Attach the event listener
-                this.controlWebSocket.addEventListener(
-                    "message",
-                    handleServerResponse
-                );
-
-                // Send the request when the connection is open
-                const sendRequest = () => {
-                    this.controlWebSocket?.send(
-                        JSON.stringify({
-                            type: "get_task_data_request",
-                            payload: { roomId },
-                        })
-                    );
-                };
-
-                if (this.controlWebSocket.readyState === WebSocket.OPEN) {
-                    sendRequest();
-                } else if (
-                    this.controlWebSocket.readyState === WebSocket.CONNECTING
-                ) {
-                    this.controlWebSocket.addEventListener(
-                        "open",
-                        sendRequest,
-                        { once: true }
-                    );
-                } else {
-                    return reject(
-                        new Error("WebSocket connection not available.")
-                    );
-                }
-
-                // Set a timeout to reject the promise if no response is received
-                timeout = setTimeout(() => {
-                    reject(new Error("Request timed out."));
-                    cleanup();
-                }, 5000);
-            });
-        };
-
-        try {
-            const success = await getTaskDataResponse();
-            if (success) {
-                return taskData;
-            }
-        } catch (error) {
-            vscode.window.showErrorMessage(
-                error instanceof Error ? error.message : String(error)
-            );
-        }
-    }
-
-    /**
-     * Sends a WebSocket request and optionally waits for a response.
-     *
-     * @param {WebSocket} controlWebSocket - The WebSocket connection.
-     * @param {string} requestType - The type of request to send.
-     * @param {any} payload - The payload to send with the request.
-     * @param {Object} [options={}] - Optional parameters for controlling request behavior.
-     * @param {string} [options.responseType] - The expected response type (⚠️ Required if `waitForResponse` is `true`).
-     * @param {(payload: any) => boolean} [options.validateResponse=() => true] - Function to validate if the response matches expectations (default: `true`).
-     * @param {string} [options.timeoutMessage='`requestType` request timed out'] - Custom error message if the request times out (default: '`requestType` request timed out').
-     * @param {number} [options.timeoutMs=5000] - Timeout duration in milliseconds (default: `5000ms`).
-     * @param {boolean} [options.waitForOpen=true] - If `true`, waits for WebSocket `"open"` event before sending (default: `true`).
-     * @param {boolean} [options.waitForResponse=true] - If `false`, the function sends the request and resolves immediately without waiting for a response (default: `true`).
-     *
-     * @returns {Promise<any>} Resolves with the response payload if `waitForResponse` is `true`, otherwise resolves immediately after sending.
-     *
-     * @throws {Error} If `controlWebSocket` is `null` or not in an open state.
-     * @throws {Error} If `waitForResponse` is `true` but `responseType` is not provided.
-     * @throws {Error} If the request fails to send or times out.
-     */
-    public sendWebSocketRequest = async (
-        controlWebSocket: WebSocket,
-        requestType: string,
-        payload: any,
-        options: {
-            responseType?: string;
-            validateResponse?: (payload: any) => boolean;
-            timeoutMessage?: string;
-            timeoutMs?: number;
-            waitForOpen?: boolean;
-            waitForResponse?: boolean;
-        } = {} // Default empty object
-    ): Promise<any> => {
-        return new Promise((resolve, reject) => {
-            if (!controlWebSocket) {
-                return reject(new Error("WebSocket connection not available."));
-            }
-
-            const {
-                responseType,
-                validateResponse = () => true,
-                timeoutMessage = undefined,
-                timeoutMs = 5000,
-                waitForOpen = true,
-                waitForResponse = true,
-            } = options;
-
-            if (waitForResponse && !responseType) {
-                return reject(
-                    new Error(
-                        "responseType is required when waiting for a response."
-                    )
-                );
-            }
-
-            const sendRequest = () => {
-                try {
-                    controlWebSocket.send(
-                        JSON.stringify({
-                            type: requestType,
-                            payload,
-                        })
-                    );
-
-                    if (!waitForResponse) {
-                        return resolve(
-                            "Request sent successfully (no response expected)."
-                        );
-                    }
-                } catch (error) {
-                    return reject(
-                        new Error(
-                            `Failed to send request: ${
-                                (error as Error).message
-                            }`
-                        )
-                    );
-                }
-
-                let timeout: NodeJS.Timeout | undefined;
-
-                const handleServerResponse = (event: any) => {
-                    try {
-                        const message =
-                            typeof event.data === "string"
-                                ? event.data
-                                : event.data.toString();
-                        const { type, payload: responsePayload } =
-                            JSON.parse(message);
-
-                        if (
-                            type === responseType &&
-                            validateResponse(responsePayload)
-                        ) {
-                            cleanup();
-                            resolve(responsePayload);
-                        }
-                    } catch (error) {
-                        cleanup();
-                        reject(
-                            new Error(
-                                `Invalid JSON from WebSocket (${responseType}): ${
-                                    (error as Error).message
-                                }`
-                            )
-                        );
-                    }
-                };
-
-                const cleanup = () => {
-                    if (timeout) {
-                        clearTimeout(timeout);
-                    }
-                    controlWebSocket.removeEventListener(
-                        "message",
-                        handleServerResponse
-                    );
-                };
-
-                controlWebSocket.addEventListener(
-                    "message",
-                    handleServerResponse
-                );
-
-                // Set a timeout for response
-                timeout = setTimeout(() => {
-                    cleanup();
-                    reject(
-                        new Error(
-                            timeoutMessage || `${requestType} request timed out`
-                        )
-                    );
-                }, timeoutMs);
-            };
-
-            // Handle WebSocket connection states
-            switch (controlWebSocket.readyState) {
-                case WebSocket.OPEN:
-                    sendRequest();
-                    break;
-
-                case WebSocket.CONNECTING:
-                    if (waitForOpen) {
-                        const handleOpen = () => {
-                            sendRequest();
-                            controlWebSocket.removeEventListener(
-                                "open",
-                                handleOpen
-                            );
-                        };
-                        controlWebSocket.addEventListener("open", handleOpen, {
-                            once: true,
-                        });
-                    } else {
-                        reject(
-                            new Error(
-                                "WebSocket is still connecting. Please wait and try again."
-                            )
-                        );
-                    }
-                    break;
-
-                case WebSocket.CLOSING:
-                    reject(
-                        new Error(
-                            "WebSocket is closing. Wait for it to reconnect."
-                        )
-                    );
-                    break;
-
-                case WebSocket.CLOSED:
-                    reject(
-                        new Error(
-                            "WebSocket connection was closed. Try restarting the session."
-                        )
-                    );
-                    break;
-
-                default:
-                    reject(new Error("WebSocket connection not available."));
-            }
-        });
-    };
-
     // Function to get the relative file path within the workspace
     public getRelativeFilePath(filePath: string): string {
         const normalizedFilePath = this.toPosixPath(filePath);
@@ -887,7 +755,8 @@ export class SessionManager {
     // Function to handle changes in excluded file extensions
     private async handleFileExtensionChanges(
         oldExcluded: Set<string>,
-        newExcluded: Set<string>
+        newExcluded: Set<string>,
+        taskData: any
     ) {
         const addedExtensions = Array.from(newExcluded).filter(
             (ext) => !oldExcluded.has(ext)
@@ -920,7 +789,7 @@ export class SessionManager {
             }
 
             if (!hasChanges) {
-                await this.removeFilesByExtension(ext);
+                await this.removeFilesByExtension(ext, taskData);
             }
         }
 
@@ -933,7 +802,8 @@ export class SessionManager {
     // Function to handle changes in excluded file extensions
     private async handleDirectoryChanges(
         oldExcluded: Set<string>,
-        newExcluded: Set<string>
+        newExcluded: Set<string>,
+        taskData: any
     ) {
         const addedDirectories = Array.from(newExcluded).filter(
             (dir) => !oldExcluded.has(dir)
@@ -969,7 +839,7 @@ export class SessionManager {
             }
 
             if (!hasChanges) {
-                await this.removeAllFilesInDirectory(dir);
+                await this.removeAllFilesInDirectory(dir, taskData);
             }
         }
 
@@ -982,7 +852,7 @@ export class SessionManager {
     // Function to load settings
     // It prioritizes the settings with changes (user or workspace settings) with regards to the default values
     // If both user and workspace settings have changes, the workspace settings take precedence
-    private loadSettings() {
+    private async loadSettings() {
         // Fetch configuration settings
         const config = vscode.workspace.getConfiguration("coducate");
 
@@ -995,27 +865,38 @@ export class SessionManager {
         this.excludedDirectories = new Set(excludedDirs);
         this.excludedFileExtensions = new Set(excludedExts);
 
+        const fetchTaskData = async () => {
+            try {
+                const taskData = await this.sendWebSocketRequest(
+                    "get_task_data_request",
+                    { roomId: this.roomId },
+                    {
+                        responseType: "get_task_data_response",
+                    }
+                );
+                return taskData;
+            } catch (error) {
+                vscode.window.showErrorMessage(
+                    error instanceof Error ? error.message : String(error)
+                );
+                return;
+            }
+        };
+        const taskData = await fetchTaskData();
+
         // Handle changes in excluded directories
         this.handleDirectoryChanges(
             oldExcludedDirectories,
-            this.excludedDirectories
+            this.excludedDirectories,
+            taskData
         );
 
         // Handle changes in excluded file extensions
         this.handleFileExtensionChanges(
             oldExcludedFileExtensions,
-            this.excludedFileExtensions
+            this.excludedFileExtensions,
+            taskData
         );
-
-        // Listen for configuration changes
-        vscode.workspace.onDidChangeConfiguration((event) => {
-            if (
-                event.affectsConfiguration("coducate.excludedDirectories") ||
-                event.affectsConfiguration("coducate.excludedFileExtensions")
-            ) {
-                this.loadSettings();
-            }
-        });
     }
 
     // Function to check if a file is excluded in settings
@@ -1184,32 +1065,29 @@ export class SessionManager {
     }
 
     // Function to remove all files with a specific extension from fileYMap
-    private async removeFilesByExtension(extension: string) {
-        const taskData = await this.requestTaskData(this.roomId);
+    private async removeFilesByExtension(extension: string, taskData: any) {
         for (const key of Array.from(this.fileYMap.keys())) {
             if (key.endsWith(extension)) {
-                if (key === taskData?.taskDescriptionPath) {
+                if (key === taskData.taskDescriptionPath) {
                     vscode.window.showWarningMessage(
                         `Cannot remove '${key}' from synchronization. This file is used for the task description.`,
                         "Ok"
                     );
                     continue;
-                } else if (key === taskData?.learningGoalsPath) {
+                } else if (key === taskData.learningGoalsPath) {
                     vscode.window.showWarningMessage(
                         `Cannot remove '${key}' from synchronization. This file is used for the learning goals.`,
                         "Ok"
                     );
                     continue;
                 }
-
                 this.fileYMap.delete(key);
             }
         }
     }
 
     // Function to remove all files within a directory from fileYMap
-    private async removeAllFilesInDirectory(dir: string) {
-        const taskData = await this.requestTaskData(this.roomId);
+    private async removeAllFilesInDirectory(dir: string, taskData: any) {
         for (const key of Array.from(this.fileYMap.keys())) {
             if (
                 key.startsWith(`${dir}/`) ||
@@ -1229,7 +1107,6 @@ export class SessionManager {
                     );
                     continue;
                 }
-
                 this.fileYMap.delete(key);
             }
         }
@@ -1390,34 +1267,21 @@ export class SessionManager {
      */
 
     public dispose() {
-        // Prevent WebSocket reconnections
-        this.shouldConnect = false;
+        // Disconnect from the WebSocket server
+        this.wsControl.close();
 
-        // Disconnect and clean up the provider
-        if (this.provider) {
-            this.provider.disconnect();
-            this.provider.destroy();
-        }
+        // Reset awareness state
+        this.provider.awareness.setLocalState(null);
 
         // Destroy the Yjs document
         if (this.yDoc) {
             this.yDoc.destroy();
         }
 
-        // Reset awareness state
-        if (this.awareness) {
-            this.awareness.setLocalState(null);
-        }
-
-        // Close the control WebSocket safely
-        if (this.controlWebSocket) {
-            if (
-                this.controlWebSocket.readyState === WebSocket.OPEN ||
-                this.controlWebSocket.readyState === WebSocket.CONNECTING
-            ) {
-                this.controlWebSocket.close();
-            }
-            this.controlWebSocket = null;
+        // Disconnect and clean up the provider
+        if (this.provider) {
+            this.provider.disconnect();
+            this.provider.destroy();
         }
 
         // Dispose the diff watcher
