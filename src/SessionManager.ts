@@ -1,25 +1,13 @@
 import * as vscode from "vscode";
-import ReconnectingWebSocket from "reconnecting-websocket";
+import ReconnectingWebSocket, { ErrorEvent } from "reconnecting-websocket";
 import { WebSocket } from "ws";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 import path from "path";
-import * as fs from "fs";
-import * as os from "os";
 import { DiffWatcher } from "./DiffWatcher";
 import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
 import { InlineCompletionProvider } from "./InlineCompletionProvider";
-import { IS_PRODUCTION } from "./extension";
-
-// Define WebSocket protocol and host
-const webSocketProtocol = IS_PRODUCTION ? "wss:" : "ws:";
-const webSocketHost = IS_PRODUCTION
-    ? "delta.peachhub-cntr1.inf.ethz.ch"
-    : "localhost:1234";
-
-// Define WebSocket URLs
-const yjsWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/yjs`;
-const controlWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/control`;
+import { TerminalShellIntegration } from "./TerminalShellIntegration";
 
 export class SessionManager {
     private wsControl: ReconnectingWebSocket;
@@ -30,10 +18,9 @@ export class SessionManager {
     private excludedDirectories: Set<string> = new Set();
     private excludedFileExtensions: Set<string> = new Set();
     private diffWatcher: DiffWatcher;
-    private notebookFilePath: string;
-    private hasExecutedOpenTerminal: boolean = false;
     private notesCodeLensProvider: NotesCodeLensProvider;
     private inlineCompletionProvider: InlineCompletionProvider;
+    private terminalShellIntegration: TerminalShellIntegration;
     private status: vscode.StatusBarItem;
     private disposables: vscode.Disposable[] = [];
     private isFlushing = false; // Flag to prevent multiple flushes
@@ -48,6 +35,8 @@ export class SessionManager {
         status: vscode.StatusBarItem,
         context: vscode.ExtensionContext
     ) {
+        const { yjsWebSocketUrl, controlWebSocketUrl } =
+            this.getWebSocketUrls(context);
         this.roomId = roomId;
         this.yDoc = new Y.Doc();
         this.provider = new WebsocketProvider(
@@ -97,13 +86,18 @@ export class SessionManager {
             { pattern: "**" },
             this.notesCodeLensProvider
         );
+
         const inlineCompletionDisposable =
             vscode.languages.registerInlineCompletionItemProvider(
                 { pattern: "**" },
                 this.inlineCompletionProvider
             );
 
-        this.disposables.push(codeLensDisposable, inlineCompletionDisposable);
+        // Initialize terminal shell integration
+        this.terminalShellIntegration = new TerminalShellIntegration(
+            context,
+            this
+        );
 
         // Load settings
         this.loadSettings();
@@ -115,13 +109,12 @@ export class SessionManager {
             );
         });
 
-        this.notebookFilePath = path.posix.join(
-            os.tmpdir(),
-            `coducateNotebook_${this.roomId}.txt`
-        );
-        fs.writeFileSync(this.notebookFilePath, "");
+        const listenerDisposables = this.setupVSCodeListeners();
 
-        this.setupVSCodeListeners();
+        // Track disposables for cleanup in the dispose method
+        this.disposables.push(codeLensDisposable, inlineCompletionDisposable);
+        this.disposables.push(...listenerDisposables);
+        context.subscriptions.push(...this.disposables);
     }
 
     /*
@@ -148,8 +141,30 @@ export class SessionManager {
         return this.inlineCompletionProvider;
     }
 
+    public getTerminalShellIntegration(): TerminalShellIntegration {
+        return this.terminalShellIntegration;
+    }
+
     public toPosixPath(filePath: string): string {
         return filePath.replace(/\\/g, "/");
+    }
+
+    private getWebSocketUrls(context: vscode.ExtensionContext) {
+        // Define WebSocket protocol and host
+        const webSocketProtocol =
+            context.extensionMode === vscode.ExtensionMode.Production
+                ? "wss:"
+                : "ws:";
+        const webSocketHost =
+            context.extensionMode === vscode.ExtensionMode.Production
+                ? "delta.peachhub-cntr1.inf.ethz.ch"
+                : "localhost:1234";
+
+        // Define WebSocket URLs
+        const yjsWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/yjs`;
+        const controlWebSocketUrl = `${webSocketProtocol}//${webSocketHost}/control`;
+
+        return { yjsWebSocketUrl, controlWebSocketUrl };
     }
 
     private addWebSocketListeners() {
@@ -169,7 +184,7 @@ export class SessionManager {
             this.status.text = "$(debug-disconnect) Coducate";
         };
 
-        const handleError = () => {
+        const handleError = (errorEvent: ErrorEvent) => {
             // Set status bar to not synchronized
             this.status.text = "$(debug-disconnect) Coducate";
         };
@@ -385,7 +400,7 @@ export class SessionManager {
                 case ReconnectingWebSocket.CLOSED:
                     reject(
                         new Error(
-                            "WebSocket connection was closed. Try restarting the session."
+                            "WebSocket connection was closed. Try to reload the window."
                         )
                     );
                     break;
@@ -400,314 +415,236 @@ export class SessionManager {
      * VSCode event listeners
      */
 
-    private setupVSCodeListeners() {
-        // Listen to file renames
-        vscode.workspace.onDidRenameFiles(async (event) => {
-            for (const { oldUri, newUri } of event.files) {
-                const oldFilePath = oldUri.fsPath;
-                const newFilePath = newUri.fsPath;
-                const oldRelativePath = this.getRelativeFilePath(oldFilePath);
-                const newRelativePath = this.getRelativeFilePath(newFilePath);
+    private setupVSCodeListeners(): vscode.Disposable[] {
+        return [
+            // Listen to file renames
+            vscode.workspace.onDidRenameFiles(async (event) => {
+                for (const { oldUri, newUri } of event.files) {
+                    const oldFilePath = oldUri.fsPath;
+                    const newFilePath = newUri.fsPath;
+                    const oldRelativePath =
+                        this.getRelativeFilePath(oldFilePath);
+                    const newRelativePath =
+                        this.getRelativeFilePath(newFilePath);
 
-                // Check if it's a file or a directory
-                const fileStat = await vscode.workspace.fs.stat(newUri);
-                if (fileStat.type === vscode.FileType.File) {
-                    // Rename single file in fileYMap
-                    await this.renameFileInYMap(
-                        oldRelativePath,
-                        newRelativePath
-                    );
-                } else if (fileStat.type === vscode.FileType.Directory) {
-                    // Rename folder and all files within it
-                    await this.renameAllFilesInDirectory(
-                        oldRelativePath,
-                        newRelativePath
-                    );
-                }
-            }
-        });
-
-        // Listen to workspace folder changes
-        vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
-            // Handle added workspace folders
-            for (const addedFolder of event.added) {
-                const folderPath = addedFolder.uri.fsPath;
-
-                // Add all files in the new folder to fileYMap
-                await this.addAllFilesInWorkspaceFolder(folderPath);
-            }
-
-            // Handle removed workspace folders
-            for (const removedFolder of event.removed) {
-                // Remove all files in the folder from fileYMap
-                this.removeAllFilesInWorkspaceFolder(removedFolder.name);
-            }
-        });
-
-        // Listen to file changes
-        vscode.workspace.onDidChangeTextDocument(async (event) => {
-            if (event.document === vscode.window.activeTextEditor?.document) {
-                const relativePath = this.getRelativeFilePath(
-                    event.document.fileName
-                );
-                if (!relativePath) {
-                    return; // Ignore files that cannot be resolved to a relative path
-                }
-
-                // Warn the instructor if the file has differences tracked in DiffWatcher
-                if (
-                    this.diffWatcher &&
-                    this.diffWatcher.getDiffFilesSet().has(relativePath)
-                ) {
-                    await vscode.window.showWarningMessage(
-                        `'${relativePath}' contains changes from clients. Please resolve these changes before editing the file.`,
-                        "Ok"
-                    );
-                }
-
-                this.applyIncrementalChanges(
-                    relativePath,
-                    event.contentChanges
-                );
-            }
-        });
-
-        // Listen to cursor movement and selection changes
-        vscode.window.onDidChangeTextEditorSelection((event) => {
-            if (event.textEditor === vscode.window.activeTextEditor) {
-                const relativeFilePath = this.getRelativeFilePath(
-                    event.textEditor.document.fileName
-                );
-                const position = event.selections[0].active;
-                const selection = event.selections[0];
-                const clientState = {
-                    filePath: relativeFilePath,
-                    cursorPosition: {
-                        line: position.line,
-                        column: position.character,
-                    },
-                    selectionRange: {
-                        start: {
-                            line: selection.start.line,
-                            column: selection.start.character,
-                        },
-                        end: {
-                            line: selection.end.line,
-                            column: selection.end.character,
-                        },
-                    },
-                };
-                this.provider.awareness.setLocalStateField(
-                    "vsCodeClient",
-                    clientState
-                );
-            }
-        });
-
-        // Listen for active editor changes (e.g., when a different file is opened)
-        vscode.window.onDidChangeActiveTextEditor(async (editor) => {
-            if (editor) {
-                const relativeFilePath = this.getRelativeFilePath(
-                    editor.document.fileName
-                );
-                const position = editor.selections[0].active;
-                const selection = editor.selections[0];
-                const clientState = {
-                    filePath: relativeFilePath,
-                    cursorPosition: {
-                        line: position.line,
-                        column: position.character,
-                    },
-                    selectionRange: {
-                        start: {
-                            line: selection.start.line,
-                            column: selection.start.character,
-                        },
-                        end: {
-                            line: selection.end.line,
-                            column: selection.end.character,
-                        },
-                    },
-                };
-                this.provider.awareness.setLocalStateField(
-                    "vsCodeClient",
-                    clientState
-                );
-
-                // Send the instructor file name to the server
-                if (relativeFilePath && this.fileYMap.has(relativeFilePath)) {
-                    try {
-                        await this.sendWebSocketRequest(
-                            "set_instructor_file_request",
-                            {
-                                roomId: this.roomId,
-                                instructorFile: relativeFilePath,
-                            },
-                            {
-                                waitForResponse: false, // Send-and-forget (no response expected)
-                            }
+                    // Check if it's a file or a directory
+                    const fileStat = await vscode.workspace.fs.stat(newUri);
+                    if (fileStat.type === vscode.FileType.File) {
+                        // Rename single file in fileYMap
+                        await this.renameFileInYMap(
+                            oldRelativePath,
+                            newRelativePath
                         );
-                    } catch (error) {
-                        vscode.window.showErrorMessage(
-                            error instanceof Error
-                                ? error.message
-                                : String(error)
+                    } else if (fileStat.type === vscode.FileType.Directory) {
+                        // Rename folder and all files within it
+                        await this.renameAllFilesInDirectory(
+                            oldRelativePath,
+                            newRelativePath
                         );
                     }
                 }
-            }
-        });
+            }),
 
-        // Listen to file creation
-        vscode.workspace.onDidCreateFiles(async (event) => {
-            for (const file of event.files) {
-                const filePath = file.fsPath;
-                const relativeFilePath = this.getRelativeFilePath(filePath);
+            // Listen to workspace folder changes
+            vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
+                // Handle added workspace folders
+                for (const addedFolder of event.added) {
+                    const folderPath = addedFolder.uri.fsPath;
 
-                // Check if it's a file or a directory
-                const fileStat = await vscode.workspace.fs.stat(file);
-                if (fileStat.type === vscode.FileType.File) {
-                    // Add single file to fileYMap
-                    await this.addFileToYMap(filePath, relativeFilePath);
+                    // Add all files in the new folder to fileYMap
+                    await this.addAllFilesInWorkspaceFolder(folderPath);
                 }
-            }
-        });
 
-        // Listen to file deletion
-        vscode.workspace.onDidDeleteFiles(async (event) => {
-            for (const file of event.files) {
-                const filePath = file.fsPath;
-                const relativeFilePath = this.getRelativeFilePath(filePath);
+                // Handle removed workspace folders
+                for (const removedFolder of event.removed) {
+                    // Remove all files in the folder from fileYMap
+                    this.removeAllFilesInWorkspaceFolder(removedFolder.name);
+                }
+            }),
 
-                // Check if any entries in fileYMap start with the folder path
-                const isFolder = Array.from(this.fileYMap.keys()).some((key) =>
-                    key.startsWith(relativeFilePath + path.posix.sep)
-                );
+            // Listen to file changes
+            vscode.workspace.onDidChangeTextDocument(async (event) => {
+                if (
+                    event.document === vscode.window.activeTextEditor?.document
+                ) {
+                    const relativePath = this.getRelativeFilePath(
+                        event.document.fileName
+                    );
+                    if (!relativePath) {
+                        return; // Ignore files that cannot be resolved to a relative path
+                    }
 
-                if (isFolder) {
-                    // If it's a folder, delete all entries within that path
-                    for (const key of Array.from(this.fileYMap.keys())) {
-                        if (key.startsWith(relativeFilePath + path.posix.sep)) {
-                            this.fileYMap.delete(key);
+                    // Warn the instructor if the file has differences tracked in DiffWatcher
+                    if (
+                        this.diffWatcher &&
+                        this.diffWatcher.getDiffFilesSet().has(relativePath)
+                    ) {
+                        await vscode.window.showWarningMessage(
+                            `'${relativePath}' contains changes from clients. Please resolve these changes before editing the file.`,
+                            "Ok"
+                        );
+                    }
+
+                    this.applyIncrementalChanges(
+                        relativePath,
+                        event.contentChanges
+                    );
+                }
+            }),
+
+            // Listen to cursor movement and selection changes
+            vscode.window.onDidChangeTextEditorSelection((event) => {
+                if (event.textEditor === vscode.window.activeTextEditor) {
+                    const relativeFilePath = this.getRelativeFilePath(
+                        event.textEditor.document.fileName
+                    );
+                    const position = event.selections[0].active;
+                    const selection = event.selections[0];
+                    const clientState = {
+                        filePath: relativeFilePath,
+                        cursorPosition: {
+                            line: position.line,
+                            column: position.character,
+                        },
+                        selectionRange: {
+                            start: {
+                                line: selection.start.line,
+                                column: selection.start.character,
+                            },
+                            end: {
+                                line: selection.end.line,
+                                column: selection.end.character,
+                            },
+                        },
+                    };
+                    this.provider.awareness.setLocalStateField(
+                        "vsCodeClient",
+                        clientState
+                    );
+                }
+            }),
+
+            // Listen for active editor changes (e.g., when a different file is opened)
+            vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+                if (editor) {
+                    const relativeFilePath = this.getRelativeFilePath(
+                        editor.document.fileName
+                    );
+                    const position = editor.selections[0].active;
+                    const selection = editor.selections[0];
+                    const clientState = {
+                        filePath: relativeFilePath,
+                        cursorPosition: {
+                            line: position.line,
+                            column: position.character,
+                        },
+                        selectionRange: {
+                            start: {
+                                line: selection.start.line,
+                                column: selection.start.character,
+                            },
+                            end: {
+                                line: selection.end.line,
+                                column: selection.end.character,
+                            },
+                        },
+                    };
+                    this.provider.awareness.setLocalStateField(
+                        "vsCodeClient",
+                        clientState
+                    );
+
+                    // Send the instructor file name to the server
+                    if (
+                        relativeFilePath &&
+                        this.fileYMap.has(relativeFilePath)
+                    ) {
+                        try {
+                            await this.sendWebSocketRequest(
+                                "set_instructor_file_request",
+                                {
+                                    roomId: this.roomId,
+                                    instructorFile: relativeFilePath,
+                                },
+                                {
+                                    waitForResponse: false, // Send-and-forget (no response expected)
+                                }
+                            );
+                        } catch (error) {
+                            vscode.window.showErrorMessage(
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error)
+                            );
                         }
                     }
-                } else {
-                    // If it's a single file, delete only that specific entry
-                    if (this.fileYMap.has(relativeFilePath)) {
-                        this.fileYMap.delete(relativeFilePath);
+                }
+            }),
+
+            // Listen to file creation
+            vscode.workspace.onDidCreateFiles(async (event) => {
+                for (const file of event.files) {
+                    const filePath = file.fsPath;
+                    const relativeFilePath = this.getRelativeFilePath(filePath);
+
+                    // Check if it's a file or a directory
+                    const fileStat = await vscode.workspace.fs.stat(file);
+                    if (fileStat.type === vscode.FileType.File) {
+                        // Add single file to fileYMap
+                        await this.addFileToYMap(filePath, relativeFilePath);
                     }
                 }
-            }
-        });
+            }),
 
-        // Listen to changes in notebook cells
-        vscode.workspace.onDidChangeNotebookDocument((event) => {
-            this.handleCellChanges(event);
+            // Listen to file deletion
+            vscode.workspace.onDidDeleteFiles(async (event) => {
+                for (const file of event.files) {
+                    const filePath = file.fsPath;
+                    const relativeFilePath = this.getRelativeFilePath(filePath);
 
-            // Execute the command only once on the first trigger
-            if (!this.hasExecutedOpenTerminal) {
-                // Request the terminal to open
-                vscode.commands.executeCommand("coducate.openTerminal");
-                this.hasExecutedOpenTerminal = true;
-            }
-        });
-
-        // Listen to notebook close events
-        vscode.workspace.onDidCloseNotebookDocument(() => {
-            // Request the terminal to close
-            vscode.commands.executeCommand("coducate.closeTerminal");
-            this.hasExecutedOpenTerminal = false;
-        });
-
-        // Listen for configuration changes
-        vscode.workspace.onDidChangeConfiguration((event) => {
-            if (
-                event.affectsConfiguration("coducate.excludedDirectories") ||
-                event.affectsConfiguration("coducate.excludedFileExtensions")
-            ) {
-                this.loadSettings();
-            }
-        });
-    }
-
-    /*
-     * Notebook Cell Output Handling
-     */
-
-    // Function to determine the MIME type of the item based on its mime property
-    private getMimeType(mime: string): string {
-        if (mime.includes("image/png")) {
-            return "image/png";
-        }
-        if (mime.includes("image/jpeg")) {
-            return "image/jpeg";
-        }
-        if (mime.includes("image/gif")) {
-            return "image/gif";
-        }
-        if (mime.includes("text/html")) {
-            return "text/html";
-        }
-        if (mime.includes("application/json")) {
-            return "application/json";
-        }
-        return "text/plain"; // Default to text/plain if unknown mime
-    }
-
-    // Function to convert UInt8Array to either Base64 or Blob (for images)
-    private convertBinaryData(
-        uint8Array: Uint8Array,
-        mimeType: string
-    ): string | Blob {
-        const MAX_SIZE_FOR_BASE64 = 50000; // Define a threshold size for Base64 (adjust as needed)
-
-        // If the binary data is small, convert it to Base64
-        if (uint8Array.length < MAX_SIZE_FOR_BASE64) {
-            return Buffer.from(uint8Array).toString("base64");
-        } else {
-            // Otherwise, create a Blob (for larger files)
-            return new Blob([uint8Array], { type: mimeType });
-        }
-    }
-
-    // Function to extract cell outputs from a notebook cell
-    private getCellOutputs(
-        cell: vscode.NotebookCell
-    ): { mime: string; data: string | Blob }[] {
-        const outputs = [];
-
-        for (const output of cell.outputs) {
-            if (output.items) {
-                for (const item of output.items) {
-                    const mimeType = this.getMimeType(item.mime);
-                    // Convert the UInt8Array to Base64 or Blob based on the data size
-                    const data = this.convertBinaryData(item.data, mimeType);
-                    outputs.push({
-                        mime: mimeType,
-                        data: data,
-                    });
-                }
-            }
-        }
-
-        return outputs;
-    }
-
-    //  Function to handle changes in notebook cells
-    private handleCellChanges(event: vscode.NotebookDocumentChangeEvent) {
-        event.cellChanges.forEach((change) => {
-            // Handle only changes in cell outputs
-            if (change.outputs) {
-                const cell = change.cell;
-                const cellOutputs = this.getCellOutputs(cell);
-                if (cellOutputs.length > 0) {
-                    this.addOutputToYMap(
-                        this.notebookFilePath,
-                        JSON.stringify(cellOutputs)
+                    // Check if any entries in fileYMap start with the folder path
+                    const isFolder = Array.from(this.fileYMap.keys()).some(
+                        (key) =>
+                            key.startsWith(relativeFilePath + path.posix.sep)
                     );
+
+                    if (isFolder) {
+                        // If it's a folder, delete all entries within that path
+                        for (const key of Array.from(this.fileYMap.keys())) {
+                            if (
+                                key.startsWith(
+                                    relativeFilePath + path.posix.sep
+                                )
+                            ) {
+                                this.fileYMap.delete(key);
+                            }
+                        }
+                    } else {
+                        // If it's a single file, delete only that specific entry
+                        if (this.fileYMap.has(relativeFilePath)) {
+                            this.fileYMap.delete(relativeFilePath);
+                        }
+                    }
                 }
-            }
-        });
+            }),
+
+            // Listen for configuration changes
+            vscode.workspace.onDidChangeConfiguration((event) => {
+                if (
+                    event.affectsConfiguration(
+                        "coducate.exclusion.excludedDirectories"
+                    ) ||
+                    event.affectsConfiguration(
+                        "coducate.exclusion.excludedFileExtensions"
+                    ) ||
+                    event.affectsConfiguration(
+                        "coducate.terminal.mirrorOnlyCoducateTerminals"
+                    )
+                ) {
+                    this.loadSettings();
+                }
+            }),
+        ];
     }
 
     /*
@@ -780,7 +717,7 @@ export class SessionManager {
 
                     // Remove the file extension from the excluded list in the settings
                     await this.removeSettingValue(
-                        "excludedFileExtensions",
+                        "exclusion.excludedFileExtensions",
                         ext
                     );
 
@@ -832,7 +769,10 @@ export class SessionManager {
                     );
 
                     // Remove the directory from the excluded list in settings
-                    await this.removeSettingValue("excludedDirectories", dir);
+                    await this.removeSettingValue(
+                        "exclusion.excludedDirectories",
+                        dir
+                    );
 
                     break;
                 }
@@ -856,15 +796,29 @@ export class SessionManager {
         // Fetch configuration settings
         const config = vscode.workspace.getConfiguration("coducate");
 
-        const excludedDirs = config.get<string[]>("excludedDirectories", []);
-        const excludedExts = config.get<string[]>("excludedFileExtensions", []);
+        const excludedDirs = config.get<string[]>(
+            "exclusion.excludedDirectories",
+            []
+        );
+        const excludedExts = config.get<string[]>(
+            "exclusion.excludedFileExtensions",
+            []
+        );
+        const mirrorOnlyCoducateTerminals = config.get<boolean>(
+            "terminal.mirrorOnlyCoducateTerminals",
+            true
+        );
 
         const oldExcludedDirectories = this.excludedDirectories;
         const oldExcludedFileExtensions = this.excludedFileExtensions;
 
         this.excludedDirectories = new Set(excludedDirs);
         this.excludedFileExtensions = new Set(excludedExts);
+        this.terminalShellIntegration.setMirrorOnlyCoducateTerminals(
+            mirrorOnlyCoducateTerminals
+        );
 
+        // Request task data from server to warn the user if the task description or learning goals files would be excluded
         const fetchTaskData = async () => {
             try {
                 const taskData = await this.sendWebSocketRequest(
@@ -1274,25 +1228,20 @@ export class SessionManager {
         this.provider.awareness.setLocalState(null);
 
         // Destroy the Yjs document
-        if (this.yDoc) {
-            this.yDoc.destroy();
-        }
+        this.yDoc.destroy();
 
         // Disconnect and clean up the provider
-        if (this.provider) {
-            this.provider.disconnect();
-            this.provider.destroy();
-        }
+        this.provider.disconnect();
+        this.provider.destroy();
 
         // Dispose the diff watcher
-        if (this.diffWatcher) {
-            this.diffWatcher.dispose();
-        }
+        this.diffWatcher.dispose();
+
+        // Dispose the terminal shell integration
+        this.terminalShellIntegration.dispose();
 
         // Dispose all registered disposables
-        if (this.disposables.length > 0) {
-            this.disposables.forEach((disposable) => disposable.dispose());
-            this.disposables = [];
-        }
+        this.disposables.forEach((disposable) => disposable.dispose());
+        this.disposables = [];
     }
 }
