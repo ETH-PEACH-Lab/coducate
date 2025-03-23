@@ -9,19 +9,11 @@ import {
     animals,
 } from "unique-names-generator";
 import { SessionManager } from "./SessionManager";
-import { CaptureTerminal } from "./CaptureTerminal";
+// import { CaptureTerminal } from "./CaptureTerminal";
 import { showTmpNotification } from "./tmpNotifications";
 
 // Key to store the room ID in the workspace state
 const ROOM_ID_KEY = "coducateRoomId";
-
-// Determine environment
-export const IS_PRODUCTION = true;
-
-// Define backend host for HTTP API requests
-const backendHost = IS_PRODUCTION
-    ? "https://delta.peachhub-cntr1.inf.ethz.ch"
-    : "http://localhost:1234"; // Development environment
 
 export async function activate(context: vscode.ExtensionContext) {
     let sessionManager: SessionManager | undefined;
@@ -37,10 +29,10 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(status);
 
     // Prompt to enable diffEditor.codeLens setting
-    const config = vscode.workspace.getConfiguration("diffEditor");
-    const currentValue = config.get<boolean>("codeLens");
+    const diffEditorConfig = vscode.workspace.getConfiguration("diffEditor");
+    const diffEditorCurrentValue = diffEditorConfig.get<boolean>("codeLens");
 
-    if (!currentValue) {
+    if (!diffEditorCurrentValue) {
         vscode.window
             .showInformationMessage(
                 "To accept/reject changes made by web clients, enable 'diffEditor.codeLens'.",
@@ -49,7 +41,7 @@ export async function activate(context: vscode.ExtensionContext) {
             )
             .then((selection) => {
                 if (selection === "Enable") {
-                    config
+                    diffEditorConfig
                         .update(
                             "codeLens",
                             true,
@@ -70,6 +62,49 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                     vscode.window.showWarningMessage(
                         "You may not be able to accept/reject changes made by web clients in the diff editor view. You can enable 'diffEditor.codeLens' in the settings.",
+                        "Ok"
+                    );
+                }
+            });
+    }
+
+    // Prompt to enable terminal.integrated.shellIntegration.enabled setting
+    const terminalIntegrationConfig = vscode.workspace.getConfiguration(
+        "terminal.integrated"
+    );
+    const terminalIntegrationCurrentValue =
+        terminalIntegrationConfig.get<boolean>("shellIntegration.enabled");
+
+    if (!terminalIntegrationCurrentValue) {
+        vscode.window
+            .showInformationMessage(
+                "To allow Coducate to mirror the terminal to the web view (read-only), enable 'terminal.integrated.shellIntegration.enabled'.",
+                { modal: true },
+                "Enable"
+            )
+            .then((selection) => {
+                if (selection === "Enable") {
+                    terminalIntegrationConfig
+                        .update(
+                            "shellIntegration.enabled",
+                            true,
+                            vscode.ConfigurationTarget.Global
+                        )
+                        .then(
+                            () => {
+                                showTmpNotification(
+                                    "'terminal.integrated.shellIntegration.enabled' has been enabled."
+                                );
+                            },
+                            (error) => {
+                                vscode.window.showErrorMessage(
+                                    "Failed to enable 'terminal.integrated.shellIntegration.enabled'."
+                                );
+                            }
+                        );
+                } else {
+                    vscode.window.showWarningMessage(
+                        "Coducate may not be able to mirror the terminal to the web view. You can enable 'terminal.integrated.shellIntegration.enabled' in the settings.",
                         "Ok"
                     );
                 }
@@ -279,9 +314,22 @@ async function initializeSession(
 }
 
 /**
+ * Get backend host based on the extension mode.
+ */
+function getBackendHost(context: vscode.ExtensionContext): string {
+    return context.extensionMode === vscode.ExtensionMode.Production
+        ? "https://delta.peachhub-cntr1.inf.ethz.ch" // Production environment
+        : "http://localhost:1234"; // Development environment
+}
+
+/**
  * Verifys the password for a given room ID.
  */
-async function verifyPassword(password: string, roomId: string) {
+async function verifyPassword(
+    backendHost: string,
+    password: string,
+    roomId: string
+) {
     const response = await fetch(`${backendHost}/api/verify-password`, {
         method: "POST",
         headers: {
@@ -299,7 +347,10 @@ async function verifyPassword(password: string, roomId: string) {
 /**
  * Checks if the room with a given room ID exists.
  */
-async function isRoomExisting(roomId: string) {
+async function isRoomExisting(
+    backendHost: string,
+    roomId: string
+): Promise<boolean> {
     const response = await fetch(`${backendHost}/api/verify-room`, {
         method: "POST",
         headers: {
@@ -308,10 +359,7 @@ async function isRoomExisting(roomId: string) {
         body: JSON.stringify({ roomId }),
     });
 
-    if (response.ok) {
-        const data = await response.json();
-        return data.success;
-    }
+    return response.ok;
 }
 
 /**
@@ -555,11 +603,15 @@ function registerCommands(
                     });
 
                     try {
-                        isRoomIdValid = !(await isRoomExisting(newRoomId));
+                        isRoomIdValid = !(await isRoomExisting(
+                            getBackendHost(context),
+                            newRoomId
+                        ));
                     } catch (error) {
                         vscode.window.showErrorMessage(
-                            "Error generating room ID: " +
-                                (error as Error).message
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
                         );
                         return;
                     }
@@ -728,10 +780,14 @@ function registerCommands(
 
                 let isPasswordValid = false;
                 try {
-                    isPasswordValid = await verifyPassword(password, roomId);
+                    isPasswordValid = await verifyPassword(
+                        getBackendHost(context),
+                        password,
+                        roomId
+                    );
                 } catch (error) {
                     vscode.window.showErrorMessage(
-                        "Error verifying password: " + (error as Error).message
+                        error instanceof Error ? error.message : String(error)
                     );
                     return;
                 }
@@ -1399,8 +1455,9 @@ function registerCommands(
         }
     );
 
-    const emulateTerminalCommand = vscode.commands.registerCommand(
-        "coducate.emulateTerminal",
+    // Command to create/open a Coducate Terminal
+    const createCoducateTerminalCommand = vscode.commands.registerCommand(
+        "coducate.createCoducateTerminal",
         async () => {
             if (!sessionManager) {
                 vscode.window.showErrorMessage(
@@ -1409,34 +1466,66 @@ function registerCommands(
                 return;
             }
 
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) {
-                vscode.window.showErrorMessage("No active editor to run code.");
-                return;
-            }
-
-            // Check if OS is Windows
-            const isWindows = os.platform() === "win32";
-            const runningProcess = isWindows ? "WSL (Bash)" : "Bash";
-
-            const task = new vscode.Task(
-                { type: "runBash" },
-                vscode.TaskScope.Workspace,
-                `Running ${runningProcess}`,
-                "Emulated Terminal",
-                new vscode.CustomExecution(
-                    async (): Promise<vscode.Pseudoterminal> =>
-                        new CaptureTerminal(sessionManager!)
-                ),
-                []
+            const existingTerminals = vscode.window.terminals;
+            const coducateTerminal = existingTerminals.find(
+                (terminal) =>
+                    terminal.creationOptions.name ===
+                    `Coducate Terminal (${sessionManager?.getRoomId()})`
             );
 
-            vscode.tasks.executeTask(task);
-
-            // Request the terminal to open
-            vscode.commands.executeCommand("coducate.openTerminal");
+            if (coducateTerminal) {
+                // Terminal already exists, open it
+                coducateTerminal.show();
+                return;
+            } else {
+                // Terminal does not exist, create it
+                const terminal = vscode.window.createTerminal({
+                    name: `Coducate Terminal (${sessionManager.getRoomId()})`,
+                });
+                terminal.show();
+            }
         }
     );
+
+    // Old pseudo terminal implementation using bash (only works with WSL for windows)
+    // const emulateTerminalCommand = vscode.commands.registerCommand(
+    //     "coducate.emulateTerminal",
+    //     async () => {
+    //         if (!sessionManager) {
+    //             vscode.window.showErrorMessage(
+    //                 "No active session found. Please start a session first."
+    //             );
+    //             return;
+    //         }
+
+    //         const editor = vscode.window.activeTextEditor;
+    //         if (!editor) {
+    //             vscode.window.showErrorMessage("No active editor to run code.");
+    //             return;
+    //         }
+
+    //         // Check if OS is Windows
+    //         const isWindows = os.platform() === "win32";
+    //         const runningProcess = isWindows ? "WSL (Bash)" : "Bash";
+
+    //         const task = new vscode.Task(
+    //             { type: "runBash" },
+    //             vscode.TaskScope.Workspace,
+    //             `Running ${runningProcess}`,
+    //             "Emulated Terminal",
+    //             new vscode.CustomExecution(
+    //                 async (): Promise<vscode.Pseudoterminal> =>
+    //                     new CaptureTerminal(sessionManager!)
+    //             ),
+    //             []
+    //         );
+
+    //         vscode.tasks.executeTask(task);
+
+    //         // Request the terminal to open
+    //         vscode.commands.executeCommand("coducate.openTerminal");
+    //     }
+    // );
 
     // Command to request terminal open
     const requestTerminalOpenCommand = vscode.commands.registerCommand(
@@ -1463,6 +1552,10 @@ function registerCommands(
                         waitForOpen: false,
                     }
                 );
+
+                sessionManager
+                    .getTerminalShellIntegration()
+                    .setTerminalFlag(true);
 
                 showTmpNotification("Terminal successfully opened.");
             } catch (error) {
@@ -1496,6 +1589,10 @@ function registerCommands(
                         waitForOpen: false,
                     }
                 );
+
+                sessionManager
+                    .getTerminalShellIntegration()
+                    .setTerminalFlag(false);
 
                 showTmpNotification("Terminal successfully closed.");
             } catch (error) {
@@ -1638,7 +1735,8 @@ function registerCommands(
         }
     );
 
-    const adjustFontSizeCommand = vscode.commands.registerCommand(
+    // Command to change the font size
+    const changeFontSizeCommand = vscode.commands.registerCommand(
         "coducate.changeFontSize",
         async () => {
             if (!sessionManager) {
@@ -1969,14 +2067,14 @@ function registerCommands(
         copyRoomIdCommand,
         grantWriteAccessCommand,
         revokeWriteAccessCommand,
-        emulateTerminalCommand,
+        createCoducateTerminalCommand,
         requestTerminalOpenCommand,
         requestTerminalCloseCommand,
         requestExplorerOpenCommand,
         requestExplorerCloseCommand,
         requestShowRoomIdCommand,
         requestHideRoomIdCommand,
-        adjustFontSizeCommand,
+        changeFontSizeCommand,
         changeThemeCommand,
         createNotesCommand,
         handleNoteActionCommand,

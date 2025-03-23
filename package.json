@@ -49,7 +49,7 @@
             "type": "object",
             "title": "Coducate",
             "properties": {
-                "coducate.excludedDirectories": {
+                "coducate.exclusion.excludedDirectories": {
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -75,7 +75,7 @@
                     ],
                     "description": "Directories to exclude from syncing."
                 },
-                "coducate.excludedFileExtensions": {
+                "coducate.exclusion.excludedFileExtensions": {
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -91,6 +91,11 @@
                         ".ipynb"
                     ],
                     "description": "File extensions to exclude from syncing."
+                },
+                "coducate.terminal.mirrorOnlyCoducateTerminals": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "If enabled, only terminals of type 'Coducate Terminal' will be mirrored to the web view.\nWarning: If disabled, ALL integrated terminals will be mirrored to the web view."
                 }
             }
         },
@@ -116,8 +121,8 @@
                 "title": "Coducate: Revoke Write Access"
             },
             {
-                "command": "coducate.emulateTerminal",
-                "title": "Coducate: Emulate Terminal"
+                "command": "coducate.createCoducateTerminal",
+                "title": "Coducate: Create Coducate Terminal"
             },
             {
                 "command": "coducate.openTerminal",
@@ -164,6 +169,14 @@
                 "title": "Coducate: Toggle Suggestions"
             }
         ],
+        "terminal": {
+            "profiles": [
+                {
+                    "id": "coducate.coducate-terminal",
+                    "title": "Coducate Terminal"
+                }
+            ]
+        },
         "keybindings": [
             {
                 "key": "ctrl+shift+u",
@@ -207,6 +220,7 @@
         "typescript": "^5.6.2"
     },
     "dependencies": {
+        "@suin/osc633-parser": "^0.0.0-alpha2",
         "@vscode/prompt-tsx": "^0.3.0-alpha.13",
         "reconnecting-websocket": "^4.4.0",
         "unique-names-generator": "^4.7.1",

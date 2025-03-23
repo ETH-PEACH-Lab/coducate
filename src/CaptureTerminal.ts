@@ -7,6 +7,7 @@ import { SessionManager } from "./SessionManager";
 
 const defaultLine = "$ ";
 export class CaptureTerminal implements vscode.Pseudoterminal {
+    private sessionManager: SessionManager;
     private writeEmitter = new vscode.EventEmitter<string>();
     private closeEmitter = new vscode.EventEmitter<void>();
     onDidWrite: vscode.Event<string> = this.writeEmitter.event;
@@ -19,11 +20,10 @@ export class CaptureTerminal implements vscode.Pseudoterminal {
     private shellProcess: ChildProcessWithoutNullStreams | null = null;
     private cwd: string = os.homedir();
 
-    constructor(private sessionManager: SessionManager) {
-        this.outputFilePath = path.join(
-            os.tmpdir(),
-            `coducateOutput_${sessionManager.getRoomId()}.txt`
-        );
+    constructor(sessionManager: SessionManager) {
+        this.sessionManager = sessionManager;
+        this.outputFilePath = `coducateOutput_${sessionManager.getRoomId()}.txt`;
+
         this.clearFile();
         this.setCwd();
     }

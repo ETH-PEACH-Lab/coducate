@@ -10,7 +10,6 @@ export class DiffWatcher {
     private registeredCodeLensDocs: Set<string> = new Set(); // Tracks documents with registered CodeLens providers
     private context: vscode.ExtensionContext;
     private roomId: string;
-
     private disposables: vscode.Disposable[] = [];
     private codeLensDisposables: Map<string, vscode.Disposable> = new Map();
 
@@ -53,16 +52,17 @@ export class DiffWatcher {
             this.rejectDiff.bind(this)
         );
 
-        // Track disposables for cleanup in the dispose method
-        this.disposables.push(this.diffButton);
-        this.disposables.push(showDiffFilesCommand);
-        this.disposables.push(acceptDiffCommand);
-        this.disposables.push(rejectDiffCommand);
-
-        context.subscriptions.push(...this.disposables);
-
         // Observe changes in Y.Text objects
         this.observeYMapChanges();
+
+        // Track disposables for cleanup in the dispose method
+        this.disposables.push(
+            this.diffButton,
+            showDiffFilesCommand,
+            acceptDiffCommand,
+            rejectDiffCommand
+        );
+        context.subscriptions.push(...this.disposables);
     }
 
     // Listen for document close events of diff editors to revalidate diff files
@@ -534,10 +534,11 @@ export class DiffWatcher {
         return null;
     }
 
-    dispose() {
-        for (const disposable of this.disposables) {
-            disposable.dispose();
-        }
+    public dispose() {
+        this.disposables.forEach((disposable) => disposable.dispose());
         this.disposables = [];
+
+        this.codeLensDisposables.forEach((disposable) => disposable.dispose());
+        this.codeLensDisposables.clear();
     }
 }
