@@ -6,10 +6,14 @@ import { AutocompletePrompt } from "./AutocompletePrompt";
 export class InlineCompletionProvider
     implements vscode.InlineCompletionItemProvider
 {
+    private notesCodeLensProvider: NotesCodeLensProvider;
     private cachedResponses: { [filePath: string]: string | null } = {};
     private suggestionsEnabled = true;
+    private userWasNotified = false;
 
-    constructor(private notesCodeLensProvider: NotesCodeLensProvider) {}
+    constructor(notesCodeLensProvider: NotesCodeLensProvider) {
+        this.notesCodeLensProvider = notesCodeLensProvider;
+    }
 
     toggleSuggestions() {
         this.suggestionsEnabled = !this.suggestionsEnabled;
@@ -141,7 +145,16 @@ export class InlineCompletionProvider
             });
 
             if (models.length === 0) {
-                vscode.window.showErrorMessage("No language models available.");
+                if (!this.userWasNotified) {
+                    const answer = await vscode.window.showWarningMessage(
+                        "No language models available. To use your notes, your typing must precisely match the notes.",
+                        "Ok"
+                    );
+
+                    if (answer === "Ok") {
+                        this.userWasNotified = true;
+                    }
+                }
                 return null;
             }
 
