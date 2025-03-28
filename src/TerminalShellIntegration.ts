@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { parse } from "@suin/osc633-parser";
 import { SessionManager } from "./SessionManager";
 
 export class TerminalShellIntegration {
@@ -51,57 +50,12 @@ export class TerminalShellIntegration {
 
                 const stream = event.execution.read();
 
-                let output = "";
-                let isCollecting = false;
-                for await (const entry of parse(stream)) {
-                    if (entry.type === "C") {
-                        // command execution started
-                        isCollecting = true;
-                    } else if (entry.type === "D") {
-                        // command execution finished
-                        isCollecting = false;
-                    } else if (entry.type === "output" && isCollecting) {
-                        output += entry.value;
-                    }
+                let rawOutput = "";
+                for await (const chunk of stream) {
+                    rawOutput += chunk;
                 }
 
-                // let rawOutput = "";
-                // for await (const chunk of stream) {
-                //     rawOutput += chunk;
-                // }
-
-                // console.log("=================================");
-                // console.log("Before terminal shell execution:\n");
-                // console.log("Raw output:\n", rawOutput);
-                // console.log("\n");
-                // console.log("Command output:\n", output);
-                // console.log("\n");
-                // // const cleanedOutput = output.split("%")[0].trim();
-
-                // // const outputLines = output.trim().split("\n");
-                // // const cleanedOutput = outputLines
-                // //     .filter((line) => !line.startsWith("%"))
-                // //     .join("\n");
-
-                // console.log("Command output cleaned:\n", cleanedOutput);
-
-                // console.log(
-                //     this.summarizeCommandLine(event.execution.commandLine)
-                // );
-
-                // console.log("=================================");
-
-                const cleanedOutput = this.cleanTerminalOutput(output);
-
-                // let commandLineAndOutput = "";
-                // if (cleanedOutput !== "") {
-                //     commandLineAndOutput = `$ <exitCode>${exitCode}</exitCode><command>${commandLine.value}</command>\n${cleanedOutput}\n\n`;
-                // } else {
-                //     commandLineAndOutput = `$ <exitCode>${exitCode}</exitCode><command>${commandLine.value}</command>\n\n`;
-                // }
-
-                // this.commandOutputBuffer += commandLineAndOutput;
-                // this.syncFile();
+                const cleanedOutput = this.cleanTerminalOutput(rawOutput);
 
                 // Store the command and output in the pending list
                 this.pendingCommands.set(
@@ -156,7 +110,7 @@ export class TerminalShellIntegration {
                 }
 
                 if (commandLine.value === "exit") {
-                    // Should be handled by the terminal close event
+                    // Should be handled by the terminal close event (should not trigger terminal shell execution)
                     // Added here for extra safety
                     return;
                 }
@@ -171,9 +125,6 @@ export class TerminalShellIntegration {
 
                 if (exitCode === undefined) {
                     // Ignore undefined exit codes
-                    vscode.window.showErrorMessage(
-                        "Coducate: Problem detecting exit code. Please try again. If the problem persists, please contact lukasmast07@gmail.com."
-                    );
                     return;
                 }
 
@@ -184,8 +135,6 @@ export class TerminalShellIntegration {
                 } else {
                     commandLineAndOutput = `$ <exitCode>${exitCode}</exitCode><command>${commandLine.value}</command>\n\n`;
                 }
-
-                console.log(commandLineAndOutput);
 
                 // Append to buffer and sync
                 this.commandOutputBuffer += commandLineAndOutput;
@@ -245,23 +194,10 @@ export class TerminalShellIntegration {
         // Remove everything after ]2; (OSC sequence that sets window titles)
         rawOutput = rawOutput.replace(/\x1b\]2;.*$/, "");
 
-        // Remove other escape sequences (color codes, OSC sequences)
-        let cleanedOutput = rawOutput
-            .replace(/\x1b\[[0-9;]*m/g, "") // Remove ANSI color codes
-            .replace(/\x1b\][^\x07]*\x07/g, "") // Remove OSC sequences
-            .replace(/\x1b\][^\x5c]*\x5c/g, "") // Remove sequences ending in \
-            .replace(/\x1b[^\x07]*\x07/g, "") // Remove unknown sequences
-            .replace(/\x1b[^\x5c]*\x5c/g, "") // Remove sequences ending in \
-            .replace(/\r/g, ""); // Remove carriage returns
+        // Remove the last line (usually a % sign, might be due to shell integration or ohmyzsh)
+        let outputLines = rawOutput.trim().split("\n");
 
-        // Remove the last line if it's just a '%' (might appear because of ohmyzsh customizations)
-        let outputLines = cleanedOutput.trim().split("\n");
-        if (
-            outputLines.length > 0 &&
-            outputLines[outputLines.length - 1].trim() === "%"
-        ) {
-            outputLines.pop();
-        }
+        outputLines.pop();
 
         return outputLines.join("\n").trim();
     }
