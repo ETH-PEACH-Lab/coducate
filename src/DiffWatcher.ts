@@ -373,15 +373,63 @@ export class DiffWatcher {
             yTextDocument &&
             vscode.workspace.textDocuments.includes(yTextDocument)
         ) {
-            const yTextContent = yText.toString();
-            const edit = new vscode.WorkspaceEdit();
-            edit.replace(
-                yTextDocument.uri,
-                new vscode.Range(0, 0, yTextDocument.lineCount, 0),
-                yTextContent
-            );
-            await vscode.workspace.applyEdit(edit);
+            // Get current content and target content for comparison
+            const currentContent = yTextDocument.getText();
+            const targetContent = yText.toString();
+
+            if (currentContent !== targetContent) {
+                // Compute differences and apply them incrementally
+                this.computeAndApplyChanges(
+                    yTextDocument,
+                    currentContent,
+                    targetContent
+                );
+            }
         }
+    }
+
+    private computeAndApplyChanges(
+        document: vscode.TextDocument,
+        currentContent: string,
+        targetContent: string
+    ) {
+        // Find the common prefix
+        let prefixLength = 0;
+        const minLength = Math.min(currentContent.length, targetContent.length);
+
+        while (
+            prefixLength < minLength &&
+            currentContent[prefixLength] === targetContent[prefixLength]
+        ) {
+            prefixLength++;
+        }
+
+        // Find the common suffix
+        let currentSuffixStart = currentContent.length;
+        let targetSuffixStart = targetContent.length;
+
+        while (
+            currentSuffixStart > prefixLength &&
+            targetSuffixStart > prefixLength &&
+            currentContent[currentSuffixStart - 1] ===
+                targetContent[targetSuffixStart - 1]
+        ) {
+            currentSuffixStart--;
+            targetSuffixStart--;
+        }
+
+        // Apply the edit
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(
+            document.uri,
+            new vscode.Range(
+                document.positionAt(prefixLength),
+                document.positionAt(currentSuffixStart)
+            ),
+            targetContent.substring(prefixLength, targetSuffixStart)
+        );
+
+        vscode.workspace.applyEdit(edit);
     }
 
     private async acceptDiff(relativePath: string) {
