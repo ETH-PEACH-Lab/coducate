@@ -1,5 +1,28 @@
 # Change Log
 
+## [0.5.0] - 2025-04-06
+
+### Added
+
+-   Implemented Terminal Shell Integration replacing the previous pseudoterminal approach, enabling seamless use of VS Code's native integrated terminal with broad shell support:
+    -   Linux/macOS: bash, fish, pwsh, zsh
+    -   Windows: Git Bash, pwsh
+-   Added new `coducate.terminal.mirrorOnlyCoducateTerminals` setting to control which terminals are mirrored to the web view
+-   Terminal background color is now set to white in light mode to improve readability
+
+### Changed
+
+-   Overhauled Coducate's web view with a modern design featuring fully resizable panels for enhanced workspace customization
+-   Replaced the overlay menu with a new side menu for better accessibility and usability
+-   Replaced `Coducate: Emulate Terminal` command with the new `Coducate: Create Coducate Terminal` command
+-   Reorganized settings structure: moved exclusion settings under a dedicated `coducate.exclusion` namespace
+    -   `coducate.excludedDirectories` → `coducate.exclusion.excludedDirectories`
+    -   `coducate.excludedFileExtensions` → `coducate.exclusion.excludedFileExtensions`
+
+### Fixed
+
+-   Fixed numerous bugs in Coducate's web view, particularly related to the panel resizing functionality
+
 ## [0.4.1] - 2025-02-05
 
 ### Changed
