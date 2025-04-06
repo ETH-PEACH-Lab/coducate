@@ -1,6 +1,6 @@
 # Coducate
 
-**Coducate** makes instructor-led live coding sessions more interactive, structured, and efficient. Whether you are teaching programming concepts, demonstrating coding techniques, or guiding participants through hands-on exercises, Coducate simplifies the process with powerful tools. It allows instructors to share their code in real-time, grant participants write access for interactive participation, and manage contributions with a built-in diff editor. Features like AI-powered code suggestions, terminal emulation, interactive notes, and a customizable **[web view](https://delta.peachhub-cntr1.inf.ethz.ch/)**—inspired by PowerPoint’s presentation mode—help create an engaging and structured learning environment. The web view **separates the instructor’s view from the participants’ view**, allowing instructors to maintain their preferred setup while participants access a distraction-free interface on any browser-accessible device. This also enables the use of in-editor notes and AI code suggestions without exposing them to participants.
+**Coducate** makes instructor-led live coding sessions more interactive, structured, and efficient. Whether you are teaching programming concepts, demonstrating coding techniques, or guiding participants through hands-on exercises, Coducate simplifies the process with powerful tools. It allows instructors to share their code in real-time, grant participants write access for interactive participation, and manage contributions with a built-in diff editor. Features like AI-powered code suggestions, terminal mirroring, interactive notes, and a customizable **[web view](https://delta.peachhub-cntr1.inf.ethz.ch/)**—inspired by PowerPoint’s presentation mode—help create an engaging and structured learning environment. The web view **separates the instructor’s view from the participants’ view**, allowing instructors to maintain their preferred setup while participants access a distraction-free interface on any browser-accessible device. This also enables the use of in-editor notes and AI code suggestions without exposing them to participants.
 
 ## Features and Commands
 
@@ -54,18 +54,26 @@ Control participant permissions to foster collaborative coding.
 
 ---
 
-### Terminal Emulation
+### Terminal Mirroring
 
 Provide participants with a real-time view of the instructor's terminal activity.
 
-> **Note:** The terminal displayed in the web view is an emulated terminal and is always read-only for participants. The instructor interacts with the actual pseudo-terminal directly within VS Code.
+> **Note:** The terminal displayed in the web view is mirrored from the instructor's environment and is always read-only for participants. The instructor interacts with the actual terminal directly within VS Code.
 
--   **Command:** `Coducate: Emulate Terminal`
-    -   Opens a pseudo-terminal running Bash (or WSL for Windows) in the instructor's environment. Input and output from the pseudo-terminal are synchronized and displayed in the emulated terminal across all web views.
+-   **Command:** `Coducate: Create Coducate Terminal`
+-   Creates a native integrated terminal in the instructor's VS Code environment. Input and output from this terminal are synchronized and displayed in the mirrored terminal across all web views.
+-   Uses your default terminal settings (shell, environment variables, working directory, etc.) configured in VS Code
+-   Supported shells:
+    -   Linux/macOS: bash, fish, pwsh, zsh
+    -   Windows: Git Bash, pwsh
+
+**Configuration:**
+
+-   Use the `coducate.terminal.mirrorOnlyCoducateTerminals` setting to control whether all integrated terminals or only Coducate Terminals are mirrored to the web view.
 
 **Demo:**
 
-![Emulate Terminal](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/emulate_terminal.gif)
+![Create Coducate Terminal](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/mirror_terminal.gif)
 
 ---
 
@@ -108,7 +116,7 @@ Modify the web view appearance to create an optimal teaching environment, such a
 
 -   **Command:** `Coducate: Open Terminal` / `Coducate: Close Terminal`
 
-    -   Open or close the emulated terminal in the web view.
+    -   Open or close the mirrored terminal in the web view.
 
 > **Note:** The following commmands only affect the instructor's web view.
 
@@ -122,7 +130,7 @@ Modify the web view appearance to create an optimal teaching environment, such a
 
 -   **Command:** `Coducate: Change Font Size`
 
-    -   Adjust the font size of the editor and the emulated terminal in the instructor's web view.
+    -   Adjust the font size of the editor and the mirrored terminal in the instructor's web view.
 
 -   **Command:** `Coducate: Change Theme`
     -   Switch between light and dark themes in the instructor's web view.
@@ -139,7 +147,7 @@ Set the task description and learning goals for your live coding session by sele
 
 **Demo:**
 
-![Task Description and Learning Goals](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/task_description_learning_goals.gif)
+![Task Description and Learning Goals](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/show_task_data.gif)
 
 ## Requirements
 
@@ -148,15 +156,15 @@ Coducate requires the following:
 -   **VS Code Version:** 1.95.0 or higher.
 -   **Internet Connection**
 
-## Settings
+# Settings
 
 Coducate includes the following settings. These can be set in user or workspace settings.
 
-The `coducate.excludedDirectories` setting is used to exclude directories from syncing. By default, the following directories are excluded:
+The `coducate.exclusion.excludedDirectories` setting is used to exclude directories from syncing. By default, the following directories are excluded:
 
 ```json
 {
-    "coducate.excludedDirectories": [
+    "coducate.exclusion.excludedDirectories": [
         "node_modules",
         ".git",
         "dist",
@@ -178,11 +186,11 @@ The `coducate.excludedDirectories` setting is used to exclude directories from s
 }
 ```
 
-The `coducate.excludedFileExtensions` setting is used to exclude files with specific extensions from syncing. By default, the following file extensions are excluded:
+The `coducate.exclusion.excludedFileExtensions` setting is used to exclude files with specific extensions from syncing. By default, the following file extensions are excluded:
 
 ```json
 {
-    "coducate.excludedFileExtensions": [
+    "coducate.exclusion.excludedFileExtensions": [
         ".DS_Store",
         ".env",
         ".env.local",
@@ -195,9 +203,33 @@ The `coducate.excludedFileExtensions` setting is used to exclude files with spec
 }
 ```
 
+The `coducate.terminal.mirrorOnlyCoducateTerminals` setting controls which terminals are mirrored to the web view:
+
+```json
+{
+    "coducate.terminal.mirrorOnlyCoducateTerminals": true
+}
+```
+
+-   When set to `true` (default): Only terminals created with the `Coducate: Create Coducate Terminal` command will be mirrored.
+-   When set to `false`: All integrated terminals will be mirrored to the web view.
+
 ## Keybindings
 
 Coducate includes the following default keybindings:
 
 -   **Toggle Suggestions:** `Ctrl+Shift+U`
 -   **Accept Next Line Suggestion:** `Ctrl+Shift+Right` (Windows/Linux), `Cmd+Shift+Right` (Mac) when inline suggestions are visible.
+
+# Known Issues
+
+## Terminal Integration
+
+-   **ZSH Theme Compatibility**: Some ZSH themes, particularly those with complex prompts like `powerlevel10k`, may interfere with terminal output detection. This can result in missing or incorrectly displayed content in the mirrored terminal.
+
+    If you experience issues with complex ZSH themes:
+
+    1. Edit your `~/.zshrc` file
+    2. Find the line with `ZSH_THEME="powerlevel10k/powerlevel10k"` (or similar)
+    3. Change to a simpler theme: `ZSH_THEME="robbyrussell"`
+    4. Reload your configuration: `source ~/.zshrc`
