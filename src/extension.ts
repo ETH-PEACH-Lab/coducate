@@ -261,10 +261,14 @@ async function initializeSession(
 
     // Capture the currently active file in the editor
     const activeEditor = vscode.window.activeTextEditor;
-    const activeFilePath = activeEditor?.document.fileName;
-    const relativeFilePath = activeFilePath
-        ? sessionManager.getRelativeFilePath(activeFilePath)
-        : null;
+    const activeFilePath = activeEditor?.document.uri.fsPath;
+    let relativeFilePath = null;
+    if (activeFilePath) {
+        const correctFilePath = await sessionManager.getCorrectCasePath(
+            activeFilePath
+        );
+        relativeFilePath = sessionManager.getRelativeFilePath(correctFilePath);
+    }
 
     // Get cursor and selection positions
     const position = activeEditor?.selections[0].active;

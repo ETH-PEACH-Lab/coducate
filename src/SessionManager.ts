@@ -421,7 +421,9 @@ export class SessionManager {
             vscode.workspace.onDidRenameFiles(async (event) => {
                 for (const { oldUri, newUri } of event.files) {
                     const oldFilePath = oldUri.fsPath;
-                    const newFilePath = newUri.fsPath;
+                    const newFilePath = await this.getCorrectCasePath(
+                        newUri.fsPath
+                    );
                     const oldRelativePath =
                         this.getRelativeFilePath(oldFilePath);
                     const newRelativePath =
@@ -435,12 +437,47 @@ export class SessionManager {
                             oldRelativePath,
                             newRelativePath
                         );
+
+                        // Check if this is just a case change
+                        const isCaseChangeOnly =
+                            oldFilePath.toLowerCase() ===
+                            newFilePath.toLowerCase();
+
+                        // If it's a case-only change and the file is currently open,
+                        // manually trigger onDidChangeActiveTextEditor handler
+                        //  as such a event is not fired if only the casing changes
+                        if (
+                            isCaseChangeOnly &&
+                            vscode.window.activeTextEditor
+                        ) {
+                            const currentEditor =
+                                vscode.window.activeTextEditor;
+                            const currentFilePath =
+                                currentEditor.document.uri.fsPath;
+
+                            // Check if the renamed file is the currently active editor
+                            if (
+                                currentFilePath.toLowerCase() ===
+                                newFilePath.toLowerCase()
+                            ) {
+                                // Force a refresh of our active editor handling
+                                this.handleActiveEditorChange(currentEditor);
+                            }
+                        }
                     } else if (fileStat.type === vscode.FileType.Directory) {
                         // Rename folder and all files within it
                         await this.renameAllFilesInDirectory(
                             oldRelativePath,
                             newRelativePath
                         );
+
+                        // If a directory was renamed and the current file is in that directory,
+                        // we should also trigger a refresh
+                        if (vscode.window.activeTextEditor) {
+                            const currentEditor =
+                                vscode.window.activeTextEditor;
+                            this.handleActiveEditorChange(currentEditor);
+                        }
                     }
                 }
             }),
@@ -467,9 +504,11 @@ export class SessionManager {
                 if (
                     event.document === vscode.window.activeTextEditor?.document
                 ) {
-                    const relativePath = this.getRelativeFilePath(
-                        event.document.fileName
+                    const correctFilePath = await this.getCorrectCasePath(
+                        event.document.uri.fsPath
                     );
+                    const relativePath =
+                        this.getRelativeFilePath(correctFilePath);
                     if (!relativePath) {
                         return; // Ignore files that cannot be resolved to a relative path
                     }
@@ -493,11 +532,14 @@ export class SessionManager {
             }),
 
             // Listen to cursor movement and selection changes
-            vscode.window.onDidChangeTextEditorSelection((event) => {
+            vscode.window.onDidChangeTextEditorSelection(async (event) => {
                 if (event.textEditor === vscode.window.activeTextEditor) {
-                    const relativeFilePath = this.getRelativeFilePath(
-                        event.textEditor.document.fileName
+                    const correctFilePath = await this.getCorrectCasePath(
+                        event.textEditor.document.uri.fsPath
                     );
+
+                    const relativeFilePath =
+                        this.getRelativeFilePath(correctFilePath);
                     const position = event.selections[0].active;
                     const selection = event.selections[0];
                     const clientState = {
@@ -526,59 +568,7 @@ export class SessionManager {
 
             // Listen for active editor changes (e.g., when a different file is opened)
             vscode.window.onDidChangeActiveTextEditor(async (editor) => {
-                if (editor) {
-                    const relativeFilePath = this.getRelativeFilePath(
-                        editor.document.fileName
-                    );
-                    const position = editor.selections[0].active;
-                    const selection = editor.selections[0];
-                    const clientState = {
-                        filePath: relativeFilePath,
-                        cursorPosition: {
-                            line: position.line,
-                            column: position.character,
-                        },
-                        selectionRange: {
-                            start: {
-                                line: selection.start.line,
-                                column: selection.start.character,
-                            },
-                            end: {
-                                line: selection.end.line,
-                                column: selection.end.character,
-                            },
-                        },
-                    };
-                    this.provider.awareness.setLocalStateField(
-                        "vsCodeClient",
-                        clientState
-                    );
-
-                    // Send the instructor file name to the server
-                    if (
-                        relativeFilePath &&
-                        this.fileYMap.has(relativeFilePath)
-                    ) {
-                        try {
-                            await this.sendWebSocketRequest(
-                                "set_instructor_file_request",
-                                {
-                                    roomId: this.roomId,
-                                    instructorFile: relativeFilePath,
-                                },
-                                {
-                                    waitForResponse: false, // Send-and-forget (no response expected)
-                                }
-                            );
-                        } catch (error) {
-                            vscode.window.showErrorMessage(
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error)
-                            );
-                        }
-                    }
-                }
+                await this.handleActiveEditorChange(editor);
             }),
 
             // Listen to file creation
@@ -650,6 +640,112 @@ export class SessionManager {
     /*
      * Settings and File Management
      */
+
+    // Function to handle active editor changes
+    private async handleActiveEditorChange(
+        editor: vscode.TextEditor | undefined
+    ) {
+        if (editor) {
+            const editorPath = editor.document.uri.fsPath;
+
+            const correctFilePath = await this.getCorrectCasePath(editorPath);
+
+            // Get the relative path with correct casing
+            const relativeFilePath = this.getRelativeFilePath(correctFilePath);
+
+            const position = editor.selections[0].active;
+            const selection = editor.selections[0];
+            const clientState = {
+                filePath: relativeFilePath,
+                cursorPosition: {
+                    line: position.line,
+                    column: position.character,
+                },
+                selectionRange: {
+                    start: {
+                        line: selection.start.line,
+                        column: selection.start.character,
+                    },
+                    end: {
+                        line: selection.end.line,
+                        column: selection.end.character,
+                    },
+                },
+            };
+
+            this.provider.awareness.setLocalStateField(
+                "vsCodeClient",
+                clientState
+            );
+
+            // Send the instructor file name to the server
+            if (relativeFilePath && this.fileYMap.has(relativeFilePath)) {
+                try {
+                    await this.sendWebSocketRequest(
+                        "set_instructor_file_request",
+                        {
+                            roomId: this.roomId,
+                            instructorFile: relativeFilePath,
+                        },
+                        {
+                            waitForResponse: false, // Send-and-forget (no response expected)
+                        }
+                    );
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        error instanceof Error ? error.message : String(error)
+                    );
+                }
+            }
+        }
+    }
+
+    // Function to get the case sensitive file or directory path
+    public async getCorrectCasePath(inputPath: string): Promise<string> {
+        try {
+            // Get directory and filename parts
+            const dirPath = path.dirname(inputPath);
+            const baseName = path.basename(inputPath);
+
+            // If this is the root directory, just return it
+            if (dirPath === inputPath || baseName === "") {
+                return inputPath;
+            }
+
+            // Recursively get the correct case for the parent directory
+            const correctParentPath = await this.getCorrectCasePath(dirPath);
+
+            // Read the directory contents to get the correct case
+            try {
+                const dirEntries = await vscode.workspace.fs.readDirectory(
+                    vscode.Uri.file(correctParentPath)
+                );
+
+                // Find the matching entry with correct case (file or directory)
+                const matchingEntry = dirEntries.find(
+                    ([entryName]) =>
+                        entryName.toLowerCase() === baseName.toLowerCase()
+                );
+
+                // Return the corrected path if found, otherwise the original
+                if (matchingEntry) {
+                    return path.join(correctParentPath, matchingEntry[0]);
+                }
+            } catch (err) {
+                // If we can't read the directory, just use the original basename
+                console.error(
+                    `Failed to read directory ${correctParentPath}:`,
+                    err
+                );
+            }
+
+            // Default fallback: use original basename with corrected parent path
+            return path.join(correctParentPath, baseName);
+        } catch (error) {
+            console.error("Error getting correct case path:", error);
+            return inputPath; // Return original on error
+        }
+    }
 
     // Function to get the relative file path within the workspace
     public getRelativeFilePath(filePath: string): string {
@@ -1182,11 +1278,17 @@ export class SessionManager {
 
         // Find all entries in fileYMap that start with the old folder path
         const keysToRename = Array.from(this.fileYMap.keys()).filter((key) =>
-            key.startsWith(normalizedOldPath + path.posix.sep)
+            key
+                .toLowerCase()
+                .startsWith(normalizedOldPath.toLowerCase() + path.posix.sep)
         );
 
         for (const oldKey of keysToRename) {
-            const newKey = oldKey.replace(normalizedOldPath, normalizedNewPath);
+            // Get the part of the path after the old folder path
+            const suffix = oldKey.substring(normalizedOldPath.length);
+            // Create the new key with the new folder path
+            const newKey = normalizedNewPath + suffix;
+
             // Reuse renameFileInYMap to handle each file rename
             await this.renameFileInYMap(oldKey, newKey);
         }
