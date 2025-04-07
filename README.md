@@ -16,10 +16,10 @@ Effortlessly begin or end your live coding sessions with Coducate.
 **Demo:**
 
 **Start Session:**
-![Start Session](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/start_session.gif)
+![Start Session](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/start_session.gif)
 
 **End Session:**
-![End Session](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/end_session.gif)
+![End Session](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/end_session.gif)
 
 ---
 
@@ -32,7 +32,7 @@ Easily manage past and ongoing sessions.
 
 **Demo:**
 
-![Manage Sessions](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/manage_sessions.gif)
+![Manage Sessions](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/manage_sessions.gif)
 
 ---
 
@@ -50,7 +50,7 @@ Control participant permissions to foster collaborative coding.
 
 **Demo:**
 
-![Grant and Revoke Write Access](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/grant_revoke_write_access.gif)
+![Grant and Revoke Write Access](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/grant_revoke_write_access.gif)
 
 ---
 
@@ -73,7 +73,7 @@ Provide participants with a real-time view of the instructor's terminal activity
 
 **Demo:**
 
-![Create Coducate Terminal](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/mirror_terminal.gif)
+![Create Coducate Terminal](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/mirror_terminal.gif)
 
 ---
 
@@ -94,7 +94,7 @@ Enhance your session with dynamic in-editor notes.
 
 **Demo:**
 
-![Create and Remove Notes](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/create_use_remove_notes.gif)
+![Create and Remove Notes](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/create_use_remove_notes.gif)
 
 ---
 
@@ -137,7 +137,7 @@ Modify the web view appearance to create an optimal teaching environment, such a
 
 **Demo:**
 
-![Customize Web View](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/adjust_web_view.gif)
+![Customize Web View](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/adjust_web_view.gif)
 
 ---
 
@@ -147,7 +147,7 @@ Set the task description and learning goals for your live coding session by sele
 
 **Demo:**
 
-![Task Description and Learning Goals](https://raw.githubusercontent.com/madbeamer/coducate-gifs/master/show_task_data.gif)
+![Task Description and Learning Goals](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/show_task_data.gif)
 
 ## Requirements
 
@@ -221,9 +221,9 @@ Coducate includes the following default keybindings:
 -   **Toggle Suggestions:** `Ctrl+Shift+U`
 -   **Accept Next Line Suggestion:** `Ctrl+Shift+Right` (Windows/Linux), `Cmd+Shift+Right` (Mac) when inline suggestions are visible.
 
-# Known Issues
+## Known Issues
 
-## Terminal Integration
+### Terminal Shell Integration
 
 -   **ZSH Theme Compatibility**: Some ZSH themes, particularly those with complex prompts like `powerlevel10k`, may interfere with terminal output detection. This can result in missing or incorrectly displayed content in the mirrored terminal.
 
