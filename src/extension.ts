@@ -468,13 +468,16 @@ function registerCommands(
                 }
             }
 
-            const sessionType = await vscode.window.showQuickPick(
-                ["New Session", "Existing Session"],
+            const sessionType = await vscode.window.showQuickPick([
                 {
-                    placeHolder:
-                        "Choose session type. (Press 'Escape' to cancel)",
-                }
-            );
+                    label: "$(coducate-create) Create New Session",
+                    value: "New Session",
+                },
+                {
+                    label: "$(coducate-join) Join Existing Session",
+                    value: "Existing Session",
+                },
+            ]);
 
             if (!sessionType) {
                 return;
@@ -485,7 +488,7 @@ function registerCommands(
                     [key: string]: { roomId: string; password: string };
                 }>("coducate.sessions") || {};
 
-            if (sessionType === "New Session") {
+            if (sessionType.value === "New Session") {
                 let sessionName;
                 do {
                     sessionName = await vscode.window.showInputBox({
@@ -509,8 +512,6 @@ function registerCommands(
                 // Prompt user for a password
                 const password = await vscode.window.showInputBox({
                     prompt: "Enter a password for this session.",
-                    placeHolder:
-                        "A password is required to secure the session.",
                     password: true,
                 });
 
@@ -750,7 +751,7 @@ function registerCommands(
                 showRoomIdMessage(
                     `Live coding session started. Room ID: ${newRoomId}`
                 );
-            } else if (sessionType === "Existing Session") {
+            } else if (sessionType.value === "Existing Session") {
                 // Convert sessions to a displayable list
                 const sessionChoices = Object.entries(existingSessions).map(
                     ([name, { roomId }]) => ({
@@ -767,11 +768,7 @@ function registerCommands(
                 }
 
                 const selectedSession = await vscode.window.showQuickPick(
-                    sessionChoices,
-                    {
-                        placeHolder:
-                            "Select an existing session. (Press 'Escape' to cancel)",
-                    }
+                    sessionChoices
                 );
 
                 if (!selectedSession) {
@@ -950,8 +947,7 @@ function registerCommands(
                 const selectedSession = await vscode.window.showQuickPick(
                     sessionChoices,
                     {
-                        placeHolder:
-                            "Select a session to manage. (Press 'Escape' to cancel)",
+                        placeHolder: "Select a session to manage.",
                     }
                 );
 
@@ -962,9 +958,22 @@ function registerCommands(
                 const selectedSessionName = selectedSession.label;
 
                 const sessionActions = await vscode.window.showQuickPick(
-                    ["Show password", "Rename Session", "Delete Session"],
+                    [
+                        {
+                            label: "$(coducate-password) Show password",
+                            value: "password",
+                        },
+                        {
+                            label: "$(coducate-rename) Rename Session",
+                            value: "rename",
+                        },
+                        {
+                            label: "$(coducate-delete) Delete Session",
+                            value: "delete",
+                        },
+                    ],
                     {
-                        placeHolder: `What would you like to do with '${selectedSessionName}'? (Press 'Escape' to cancel)`,
+                        placeHolder: `What would you like to do with '${selectedSessionName}'?`,
                     }
                 );
 
@@ -972,7 +981,7 @@ function registerCommands(
                     continue; // Go back to the session list
                 }
 
-                if (sessionActions === "Show password") {
+                if (sessionActions.value === "password") {
                     const sessionData = existingSessions[selectedSessionName];
                     if (!sessionData) {
                         vscode.window.showErrorMessage(
@@ -993,10 +1002,11 @@ function registerCommands(
                         showTmpNotification("Password copied to clipboard.");
                         return;
                     }
-                } else if (sessionActions === "Rename Session") {
+
+                    return;
+                } else if (sessionActions.value === "rename") {
                     const newSessionName = await vscode.window.showInputBox({
                         prompt: `Enter a new name for the session '${selectedSessionName}'.`,
-                        placeHolder: "My New Session Name",
                         value: selectedSessionName,
                     });
 
@@ -1022,11 +1032,13 @@ function registerCommands(
                     showTmpNotification(
                         `Session '${selectedSessionName}' renamed to '${newSessionName}'.`
                     );
-                } else if (sessionActions === "Delete Session") {
+
+                    return;
+                } else if (sessionActions.value === "delete") {
                     const confirmDelete = await vscode.window.showQuickPick(
                         ["Yes", "No"],
                         {
-                            placeHolder: `Are you sure you want to delete the session '${selectedSessionName}'? (Press 'Escape' to cancel)`,
+                            placeHolder: `Are you sure you want to delete the session '${selectedSessionName}'?`,
                         }
                     );
 
@@ -1083,16 +1095,16 @@ function registerCommands(
             }
 
             const grantAccessLoop = async () => {
-                const decision = await vscode.window.showQuickPick(
-                    [
-                        "Grant write access to a specific client",
-                        "Grant write access to all clients",
-                    ],
+                const decision = await vscode.window.showQuickPick([
                     {
-                        placeHolder:
-                            "Choose how to grant write access. (Press 'Escape' to cancel)",
-                    }
-                );
+                        label: "$(coducate-person-add) Grant write access to a specific client",
+                        value: "specific",
+                    },
+                    {
+                        label: "$(coducate-people-add) Grant write access to all clients",
+                        value: "all",
+                    },
+                ]);
 
                 if (decision === undefined) {
                     return;
@@ -1123,12 +1135,11 @@ function registerCommands(
 
                 const clientSet = roomAccessMap.get(roomId) || new Set();
 
-                if (decision === "Grant write access to a specific client") {
+                if (decision.value === "specific") {
                     while (true) {
                         const targetSimpleID = await vscode.window.showInputBox(
                             {
                                 prompt: "Enter the client ID to grant write access.",
-                                placeHolder: "Enter client ID.",
                             }
                         );
 
@@ -1144,69 +1155,67 @@ function registerCommands(
                                 continue;
                             }
 
-                            const grantWriteAccessResponse = async () => {
-                                try {
-                                    const responsePayload =
-                                        await sessionManager?.sendWebSocketRequest(
-                                            "grant_access_request",
-                                            { roomId, targetSimpleID },
-                                            {
-                                                responseType:
-                                                    "grant_access_response",
-                                                validateResponse: (payload) =>
-                                                    payload.simpleID ===
-                                                        targetSimpleID &&
-                                                    payload.roomId === roomId,
-                                                timeoutMessage:
-                                                    "Grant write access request timed out. Client may not exist.",
-                                                waitForOpen: false,
-                                            }
-                                        );
-
-                                    return responsePayload;
-                                } catch (error) {
-                                    vscode.window.showErrorMessage(
-                                        error instanceof Error
-                                            ? error.message
-                                            : String(error)
+                            let responsePayload;
+                            try {
+                                responsePayload =
+                                    await sessionManager?.sendWebSocketRequest(
+                                        "grant_access_request",
+                                        { roomId, targetSimpleID },
+                                        {
+                                            responseType:
+                                                "grant_access_response",
+                                            validateResponse: (payload) =>
+                                                payload.simpleID ===
+                                                    targetSimpleID &&
+                                                payload.roomId === roomId,
+                                            timeoutMessage: `Grant write access request timed out. Client ${targetSimpleID} may not exist.`,
+                                            waitForOpen: false,
+                                        }
                                     );
-
-                                    return;
-                                }
-                            };
-
-                            const responsePayload =
-                                await grantWriteAccessResponse();
+                            } catch (error) {
+                                vscode.window.showErrorMessage(
+                                    error instanceof Error
+                                        ? error.message
+                                        : String(error)
+                                );
+                                continue; // Skip to next iteration
+                            }
 
                             const responseSimpleID = responsePayload?.simpleID;
 
-                            // Add the user ID to the roomAccessMap
-                            clientSet.add(responseSimpleID);
-                            roomAccessMap.set(roomId, clientSet);
+                            // Only update access map and show notification if we got a valid response
+                            if (responseSimpleID) {
+                                // Add the user ID to the roomAccessMap
+                                clientSet.add(responseSimpleID);
+                                roomAccessMap.set(roomId, clientSet);
 
-                            // Convert Sets to arrays for serialization
-                            const serializedMap = JSON.stringify(
-                                Array.from(roomAccessMap.entries()).map(
-                                    ([key, value]) => [key, Array.from(value)]
-                                )
-                            );
+                                // Convert Sets to arrays for serialization
+                                const serializedMap = JSON.stringify(
+                                    Array.from(roomAccessMap.entries()).map(
+                                        ([key, value]) => [
+                                            key,
+                                            Array.from(value),
+                                        ]
+                                    )
+                                );
 
-                            await context.globalState.update(
-                                "roomAccessMap",
-                                serializedMap
-                            );
+                                await context.globalState.update(
+                                    "roomAccessMap",
+                                    serializedMap
+                                );
 
-                            showTmpNotification(
-                                `Write access granted to client ID: ${responseSimpleID}.`
-                            );
+                                showTmpNotification(
+                                    `Write access granted to client ${responseSimpleID}.`
+                                );
+                            }
                         }
                     }
-                } else if (decision === "Grant write access to all clients") {
+                } else if (decision.value === "all") {
                     const confirmation = await vscode.window.showQuickPick(
                         ["Yes", "No"],
                         {
                             placeHolder:
-                                "Are you sure you want to grant write access to all clients? (Press 'Escape' to cancel)",
+                                "Are you sure you want to grant write access to all clients?",
                         }
                     );
 
@@ -1215,41 +1224,36 @@ function registerCommands(
                         return;
                     }
 
-                    const grantWriteAccessToAllResponse = async () => {
-                        try {
-                            const responsePayload =
-                                await sessionManager?.sendWebSocketRequest(
-                                    "grant_access_request",
-                                    { roomId, targetSimpleID: null },
-                                    {
-                                        responseType: "grant_access_response",
-                                        validateResponse: (payload) =>
-                                            payload.roomId === roomId &&
-                                            Array.isArray(payload.simpleID),
-                                        timeoutMessage:
-                                            "Grant write access request timed out.",
-                                        waitForOpen: false,
-                                    }
-                                );
-
-                            return responsePayload;
-                        } catch (error) {
-                            vscode.window.showErrorMessage(
-                                error instanceof Error
-                                    ? error.message
-                                    : String(error)
+                    let responsePayload;
+                    try {
+                        responsePayload =
+                            await sessionManager?.sendWebSocketRequest(
+                                "grant_access_request",
+                                { roomId, targetSimpleID: null },
+                                {
+                                    responseType: "grant_access_response",
+                                    validateResponse: (payload) =>
+                                        payload.roomId === roomId &&
+                                        Array.isArray(payload.simpleID),
+                                    timeoutMessage:
+                                        "Grant write access request timed out.",
+                                    waitForOpen: false,
+                                }
                             );
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
+                        );
+                        return;
+                    }
 
-                            return;
-                        }
-                    };
+                    const grantedClientIDs = responsePayload?.simpleID?.map(
+                        (id: number) => String(id)
+                    );
 
-                    const responsePayload =
-                        await grantWriteAccessToAllResponse();
-
-                    const grantedClientIDs = responsePayload?.simpleID;
-
-                    if (grantedClientIDs) {
+                    if (grantedClientIDs && grantedClientIDs.length > 0) {
                         // Add all client IDs to the roomAccessMap
                         for (const clientID of grantedClientIDs) {
                             clientSet.add(clientID);
@@ -1296,68 +1300,75 @@ function registerCommands(
 
             const roomId = sessionManager.getRoomId();
 
-            // Retrieve the stored map from globalState
-            const storedData = context.globalState.get<string>("roomAccessMap");
-            const roomAccessMap: Map<string, Set<string>> = storedData
-                ? new Map(
-                      JSON.parse(storedData).map(
-                          ([key, value]: [string, string[]]) => [
-                              key,
-                              new Set(value), // Convert array to Set
-                          ]
+            if (!roomId) {
+                vscode.window.showErrorMessage(
+                    "Room ID not found. Please start a session first."
+                );
+                return;
+            }
+
+            const revokeAccessLoop = async () => {
+                // Retrieve the stored map from globalState
+                const storedData =
+                    context.globalState.get<string>("roomAccessMap");
+                const roomAccessMap: Map<string, Set<string>> = storedData
+                    ? new Map(
+                          JSON.parse(storedData).map(
+                              ([key, value]: [string, string[]]) => [
+                                  key,
+                                  new Set(value), // Convert array to Set
+                              ]
+                          )
                       )
-                  )
-                : new Map();
+                    : new Map();
 
-            // Get the client set for the current room or initialize a new Set
-            const clientSet = roomAccessMap.get(roomId) || new Set();
+                // Get the client set for the current room or initialize a new Set
+                const clientSet = roomAccessMap.get(roomId) || new Set();
 
-            if (clientSet.size === 0) {
-                showTmpNotification("No clients have write access.");
-                return;
-            }
-
-            // Ask the user if they want to revoke access for all clients or a specific client
-            const revokeChoice = await vscode.window.showQuickPick(
-                [
-                    "Revoke write access for a specific client",
-                    "Revoke write access for all clients",
-                ],
-                {
-                    placeHolder:
-                        "Choose how to revoke write access. (Press 'Escape' to cancel)",
+                if (clientSet.size === 0) {
+                    showTmpNotification("No clients have write access.");
+                    return;
                 }
-            );
 
-            if (revokeChoice === undefined) {
-                return;
-            }
+                // Ask the user if they want to revoke access for all clients or a specific client
+                const revokeChoice = await vscode.window.showQuickPick([
+                    {
+                        label: "$(coducate-person-delete) Revoke write access for a specific client",
+                        value: "specific",
+                    },
+                    {
+                        label: "$(coducate-people-delete) Revoke write access for all clients",
+                        value: "all",
+                    },
+                ]);
 
-            if (revokeChoice === "Revoke write access for a specific client") {
-                while (true) {
-                    if (clientSet.size === 0) {
-                        return;
-                    }
+                if (revokeChoice === undefined) {
+                    return;
+                }
 
-                    // Convert the Set to an array for quick pick
-                    const clientList = Array.from(clientSet);
-
-                    // Ask the user to choose a client ID from the list or input manually
-                    const targetSimpleID = await vscode.window.showQuickPick(
-                        clientList,
-                        {
-                            placeHolder:
-                                "Choose a client ID to revoke write access. (Press 'Escape' to cancel)",
+                if (revokeChoice.value === "specific") {
+                    while (true) {
+                        if (clientSet.size === 0) {
+                            return;
                         }
-                    );
 
-                    if (targetSimpleID === undefined) {
-                        return;
-                    }
+                        // Convert the Set to an array for quick pick
+                        const clientList = Array.from(clientSet);
 
-                    const revokeWriteAccessResponse = async () => {
+                        // Ask the user to choose a client ID from the list or input manually
+                        const targetSimpleID =
+                            await vscode.window.showQuickPick(clientList, {
+                                placeHolder:
+                                    "Choose a client ID to revoke write access.",
+                            });
+
+                        if (targetSimpleID === undefined) {
+                            return;
+                        }
+
+                        let responsePayload;
                         try {
-                            const responsePayload =
+                            responsePayload =
                                 await sessionManager?.sendWebSocketRequest(
                                     "revoke_access_request",
                                     { roomId, targetSimpleID },
@@ -1367,95 +1378,113 @@ function registerCommands(
                                             payload.simpleID ===
                                                 targetSimpleID &&
                                             payload.roomId === roomId,
-                                        timeoutMessage:
-                                            "Revoke write access request timed out.",
+                                        timeoutMessage: `Revoke write access request timed out. Client ${targetSimpleID} may still have write access.`,
                                         waitForOpen: false,
                                     }
                                 );
-
-                            return responsePayload;
                         } catch (error) {
                             vscode.window.showErrorMessage(
                                 error instanceof Error
                                     ? error.message
                                     : String(error)
                             );
-
-                            return;
+                            continue; // Skip to next iteration
                         }
-                    };
 
-                    const responsePayload = await revokeWriteAccessResponse();
+                        const responseSimpleID = responsePayload?.simpleID;
 
-                    const responseSimpleID = responsePayload?.simpleID;
+                        if (responseSimpleID) {
+                            // Remove the specific client from the roomAccessMap
+                            clientSet.delete(responseSimpleID);
+                            roomAccessMap.set(roomId, clientSet);
+                            const serializedMap = JSON.stringify(
+                                Array.from(roomAccessMap.entries()).map(
+                                    ([key, value]) => [
+                                        key,
+                                        Array.from(value), // Convert Set back to array for serialization
+                                    ]
+                                )
+                            );
 
-                    if (responseSimpleID) {
-                        // Remove the specific client from the roomAccessMap
-                        clientSet.delete(responseSimpleID);
-                        roomAccessMap.set(roomId, clientSet);
-                        const serializedMap = JSON.stringify(
-                            Array.from(roomAccessMap.entries()).map(
-                                ([key, value]) => [
-                                    key,
-                                    Array.from(value), // Convert Set back to array for serialization
-                                ]
-                            )
+                            await context.globalState.update(
+                                "roomAccessMap",
+                                serializedMap
+                            );
+
+                            showTmpNotification(
+                                `Write access revoked from client ${responseSimpleID}.`
+                            );
+                        }
+                    }
+                } else if (revokeChoice.value === "all") {
+                    const confirmation = await vscode.window.showQuickPick(
+                        ["Yes", "No"],
+                        {
+                            placeHolder:
+                                "Are you sure you want to revoke write access from all clients?",
+                        }
+                    );
+
+                    if (confirmation === "No" || !confirmation) {
+                        await revokeAccessLoop(); // Restart the process
+                        return;
+                    }
+
+                    let responsePayload;
+                    try {
+                        responsePayload =
+                            await sessionManager?.sendWebSocketRequest(
+                                "revoke_access_request",
+                                { roomId, targetSimpleID: null },
+                                {
+                                    responseType: "revoke_access_response",
+                                    validateResponse: (payload) =>
+                                        payload.roomId === roomId &&
+                                        payload.simpleID === null,
+                                    timeoutMessage:
+                                        "Revoke write access request timed out.",
+                                    waitForOpen: false,
+                                }
+                            );
+
+                        // Only proceed if we got a successful response
+                        if (responsePayload) {
+                            // Store the client count before clearing
+                            const clientCount = clientSet.size;
+
+                            // Clear the roomAccessMap for the current room
+                            roomAccessMap.set(roomId, new Set());
+
+                            // Convert Sets to arrays for serialization
+                            const serializedMap = JSON.stringify(
+                                Array.from(roomAccessMap.entries()).map(
+                                    ([key, value]) => [key, Array.from(value)]
+                                )
+                            );
+
+                            await context.globalState.update(
+                                "roomAccessMap",
+                                serializedMap
+                            );
+
+                            showTmpNotification(
+                                `Write access revoked for all clients (${clientCount} client${
+                                    clientCount === 1 ? "" : "s"
+                                }).`
+                            );
+                        }
+                    } catch (error) {
+                        vscode.window.showErrorMessage(
+                            error instanceof Error
+                                ? error.message
+                                : String(error)
                         );
-
-                        await context.globalState.update(
-                            "roomAccessMap",
-                            serializedMap
-                        );
-
-                        showTmpNotification(
-                            `Write access revoked from client ID: ${responseSimpleID}.`
-                        );
+                        return;
                     }
                 }
-            } else if (revokeChoice === "Revoke write access for all clients") {
-                try {
-                    await sessionManager?.sendWebSocketRequest(
-                        "revoke_access_request",
-                        { roomId, targetSimpleID: null },
-                        {
-                            responseType: "revoke_access_response",
-                            validateResponse: (payload) =>
-                                payload.roomId === roomId &&
-                                payload.simpleID === null,
-                            timeoutMessage:
-                                "Revoke write access request timed out.",
-                            waitForOpen: false,
-                        }
-                    );
+            };
 
-                    // Clear the roomAccessMap for the current room
-                    roomAccessMap.set(roomId, new Set());
-
-                    // Convert Sets to arrays for serialization
-                    const serializedMap = JSON.stringify(
-                        Array.from(roomAccessMap.entries()).map(
-                            ([key, value]) => [key, Array.from(value)]
-                        )
-                    );
-
-                    await context.globalState.update(
-                        "roomAccessMap",
-                        serializedMap
-                    );
-
-                    showTmpNotification(
-                        `Write access revoked for all clients (${
-                            clientSet.size
-                        } client${clientSet.size === 1 ? "" : "s"}).`
-                    );
-                } catch (error) {
-                    vscode.window.showErrorMessage(
-                        error instanceof Error ? error.message : String(error)
-                    );
-
-                    return;
-                }
-            }
+            await revokeAccessLoop();
         }
     );
 
@@ -1752,12 +1781,10 @@ function registerCommands(
 
             const quickPick = vscode.window.createQuickPick();
             quickPick.items = [
-                { label: "Increase Font Size" },
-                { label: "Decrease Font Size" },
+                { label: "$(coducate-increase) Increase Font Size" },
+                { label: "$(coducate-decrease) Decrease Font Size" },
             ];
             quickPick.title = "Change Font Size";
-            quickPick.placeholder =
-                "Select an action. (Press 'Escape' to cancel)";
             quickPick.buttons = [vscode.QuickInputButtons.Back];
 
             quickPick.onDidTriggerButton(() => {
@@ -1766,14 +1793,12 @@ function registerCommands(
 
             quickPick.onDidChangeSelection(async (selection) => {
                 if (!selection[0] || !sessionManager) {
-                    vscode.window.showErrorMessage(
-                        "Invalid input or session not active."
-                    );
                     return;
                 }
 
                 const choice = selection[0].label;
-                const increaseFontSize = choice === "Increase Font Size";
+                const increaseFontSize =
+                    choice === "$(coducate-increase) Increase Font Size";
 
                 try {
                     await sessionManager.sendWebSocketRequest(
@@ -1804,6 +1829,14 @@ function registerCommands(
 
                     return;
                 }
+
+                // Clear the selection so the same item can be selected again
+                quickPick.selectedItems = [];
+            });
+
+            // Add a proper disposal method when we want to close
+            quickPick.onDidHide(() => {
+                quickPick.dispose();
             });
 
             quickPick.show();
@@ -1820,35 +1853,37 @@ function registerCommands(
                 return;
             }
 
-            const theme = await vscode.window.showQuickPick(["Dark", "Light"], {
-                placeHolder: "Select theme. (Press 'Escape' to cancel)",
-            });
+            const theme = await vscode.window.showQuickPick([
+                {
+                    label: "$(coducate-dark-mode) Dark",
+                    value: "dark",
+                },
+                { label: "$(coducate-light-mode) Light", value: "light" },
+            ]);
 
             if (!theme) {
                 return; // User canceled selection
             }
 
-            const selectedTheme = theme.toLowerCase();
-
             try {
                 await sessionManager.sendWebSocketRequest(
                     "change_theme_request",
                     {
-                        changedTheme: selectedTheme,
+                        changedTheme: theme.value,
                         roomId: sessionManager.getRoomId(),
                     },
                     {
                         responseType: "change_theme_response",
                         validateResponse: (payload) =>
                             payload.roomId === sessionManager?.getRoomId() &&
-                            payload.changedTheme === selectedTheme,
+                            payload.changedTheme === theme.value,
                         timeoutMessage: "Change theme request timed out.",
                         waitForOpen: false,
                     }
                 );
 
                 showTmpNotification(
-                    `Theme successfully changed to ${theme} mode.`
+                    `Theme successfully changed to ${theme.value} mode.`
                 );
             } catch (error) {
                 vscode.window.showErrorMessage(
@@ -1959,8 +1994,7 @@ function registerCommands(
                     { label: "Delete Note", value: "delete" },
                 ],
                 {
-                    placeHolder:
-                        "What do you want to do with this note? (Press 'Escape' to cancel)",
+                    placeHolder: "What do you want to do with this note?",
                 }
             );
 
@@ -2010,19 +2044,16 @@ function registerCommands(
 
             const filePath = editor.document.uri.fsPath;
 
-            const choice = await vscode.window.showQuickPick(
-                [
-                    { label: "Remove all notes in this file", value: "file" },
-                    {
-                        label: "Remove all notes in this workspace",
-                        value: "workspace",
-                    },
-                ],
+            const choice = await vscode.window.showQuickPick([
                 {
-                    placeHolder:
-                        "Choose which notes to remove. (Press 'Escape' to cancel)",
-                }
-            );
+                    label: "$(coducate-file) Remove all notes in this file",
+                    value: "file",
+                },
+                {
+                    label: "$(coducate-workspace) Remove all notes in this workspace",
+                    value: "workspace",
+                },
+            ]);
 
             if (choice === undefined) {
                 return; // User cancelled
