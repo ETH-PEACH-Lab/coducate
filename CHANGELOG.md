@@ -1,5 +1,21 @@
 # Change Log
 
+## [0.5.1] - 2025-04-09
+
+### Added
+
+-   Added icons to quickpick options across all commands for better visual distinction
+
+### Changed
+
+-   The `Coducate: Revoke Write Access` command now asks for confirmation before revoking write access from all participants
+-   Minor improvements to the web view's design and layout for better usability
+
+### Fixed
+
+-   Fixed a bug where the `Coducate: Change Font Size` command was not responding to mouse clicks on quickpick options
+-   Fixed GIF links in README to support Git LFS
+
 ## [0.5.0] - 2025-04-06
 
 ### Added
