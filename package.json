@@ -189,7 +189,114 @@
                 "command": "editor.action.inlineSuggest.acceptNextLine",
                 "when": "inlineSuggestionVisible && !editorReadonly"
             }
-        ]
+        ],
+        "icons": {
+            "coducate-dark-mode": {
+                "description": "Dark mode icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e900"
+                }
+            },
+            "coducate-delete": {
+                "description": "Delete icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e901"
+                }
+            },
+            "coducate-file": {
+                "description": "File icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e902"
+                }
+            },
+            "coducate-light-mode": {
+                "description": "Light mode icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e903"
+                }
+            },
+            "coducate-password": {
+                "description": "Password icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e904"
+                }
+            },
+            "coducate-people-add": {
+                "description": "People add icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e905"
+                }
+            },
+            "coducate-people-delete": {
+                "description": "People delete icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e906"
+                }
+            },
+            "coducate-person-add": {
+                "description": "Person add icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e907"
+                }
+            },
+            "coducate-person-delete": {
+                "description": "Person delete icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e908"
+                }
+            },
+            "coducate-rename": {
+                "description": "Rename icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e909"
+                }
+            },
+            "coducate-workspace": {
+                "description": "Workspace icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e90a"
+                }
+            },
+            "coducate-increase": {
+                "description": "Increase icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e90b"
+                }
+            },
+            "coducate-decrease": {
+                "description": "Decrease icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e90c"
+                }
+            },
+            "coducate-create": {
+                "description": "Create icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e90d"
+                }
+            },
+            "coducate-join": {
+                "description": "Join icon for Coducate",
+                "default": {
+                    "fontPath": "public/coducate-icons.woff",
+                    "fontCharacter": "\\e90e"
+                }
+            }
+        }
     },
     "scripts": {
         "vscode:prepublish": "npm run package",
