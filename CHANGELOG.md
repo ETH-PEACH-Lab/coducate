@@ -1,5 +1,11 @@
 # Change Log
 
+## [0.5.2] - 2025-10-22
+
+### Changed
+
+-   Migrated to new production domain at https://coducate.me
+
 ## [0.5.1] - 2025-04-09
 
 ### Added
