@@ -322,7 +322,7 @@ async function initializeSession(
  */
 function getBackendHost(context: vscode.ExtensionContext): string {
     return context.extensionMode === vscode.ExtensionMode.Production
-        ? "https://delta.peachhub-cntr1.inf.ethz.ch" // Production environment
+        ? "https://coducate.me" // Production environment
         : "http://localhost:1234"; // Development environment
 }
 

@@ -157,7 +157,7 @@ export class SessionManager {
                 : "ws:";
         const webSocketHost =
             context.extensionMode === vscode.ExtensionMode.Production
-                ? "delta.peachhub-cntr1.inf.ethz.ch"
+                ? "coducate.me"
                 : "localhost:1234";
 
         // Define WebSocket URLs
