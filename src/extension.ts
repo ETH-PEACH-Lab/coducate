@@ -35,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!diffEditorCurrentValue) {
         vscode.window
             .showInformationMessage(
-                "To accept/reject changes made by web clients, enable 'diffEditor.codeLens'.",
+                "To accept/rollback changes made by web clients, enable 'diffEditor.codeLens'.",
                 { modal: true },
                 "Enable"
             )
@@ -61,7 +61,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         );
                 } else {
                     vscode.window.showWarningMessage(
-                        "You may not be able to accept/reject changes made by web clients in the diff editor view. You can enable 'diffEditor.codeLens' in the settings.",
+                        "You may not be able to accept/rollback changes made by web clients in the diff editor view. You can enable 'diffEditor.codeLens' in the settings.",
                         "Ok"
                     );
                 }
@@ -2095,6 +2095,32 @@ function registerCommands(
         }
     );
 
+    const reviewChangesCommand = vscode.commands.registerCommand(
+        "coducate.reviewChanges",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No active session found.");
+                return;
+            }
+            
+            const changeTracker = sessionManager.getChangeTracker();
+            const filesWithChanges = changeTracker.getFilesWithChanges();
+            
+            if (filesWithChanges.length === 0) {
+                vscode.window.showInformationMessage("No changes to review.");
+                return;
+            }
+
+            const selected = await vscode.window.showQuickPick(filesWithChanges, {
+                placeHolder: "Select a file to review changes"
+            });
+
+            if (selected) {
+                await changeTracker.showDiff(selected);
+            }
+        }
+    );
+
     context.subscriptions.push(
         startCommand,
         endCommand,
@@ -2114,7 +2140,8 @@ function registerCommands(
         createNotesCommand,
         handleNoteActionCommand,
         removeNoteCommand,
-        toggleSuggestionsCommand
+        toggleSuggestionsCommand,
+        reviewChangesCommand
     );
 }
 

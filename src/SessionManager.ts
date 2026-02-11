@@ -4,10 +4,11 @@ import { WebSocket } from "ws";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 import path from "path";
-import { DiffWatcher } from "./DiffWatcher";
 import { NotesCodeLensProvider } from "./NotesCodeLensProvider";
 import { InlineCompletionProvider } from "./InlineCompletionProvider";
 import { TerminalShellIntegration } from "./TerminalShellIntegration";
+import { YTextVSCodeBinding } from "./YTextVSCodeBinding";
+import { ChangeTracker } from "./ChangeTracker";
 
 export class SessionManager {
     private wsControl: ReconnectingWebSocket;
@@ -17,7 +18,6 @@ export class SessionManager {
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
     private excludedDirectories: Set<string> = new Set();
     private excludedFileExtensions: Set<string> = new Set();
-    private diffWatcher: DiffWatcher;
     private notesCodeLensProvider: NotesCodeLensProvider;
     private inlineCompletionProvider: InlineCompletionProvider;
     private terminalShellIntegration: TerminalShellIntegration;
@@ -29,6 +29,9 @@ export class SessionManager {
         string,
         Record<string, Array<(data: any) => void>>
     > = {}; // Store pending responses for each roomId and responseType
+    
+    private ytextBindings: Map<string, YTextVSCodeBinding> = new Map();
+    private changeTracker: ChangeTracker;
 
     constructor(
         roomId: string,
@@ -47,6 +50,24 @@ export class SessionManager {
                 WebSocketPolyfill: require("ws"),
             }
         );
+
+        // Create status bar for changes
+        const changesStatus = vscode.window.createStatusBarItem(
+            vscode.StatusBarAlignment.Right,
+            98  // Show next to your main status bar
+        );
+
+        this.changeTracker = new ChangeTracker(context, roomId, changesStatus);
+
+        this.changeTracker.setGetFileUri((relativePath) => this.getFileUriForPath(relativePath));
+
+        this.changeTracker.setOnAccept(async (relativePath) => {
+            await this.handleAcceptCurrentVersion(relativePath);
+        });
+
+        this.changeTracker.setOnRollback(async (relativePath) => {
+            await this.handleRollbackChanges(relativePath);
+        });
 
         // Separate WebSocket for custom messages
         const bcChannelControlUrl = controlWebSocketUrl + "/" + roomId;
@@ -67,8 +88,17 @@ export class SessionManager {
         // Initialize the shared file list in the Y.Doc
         this.fileYMap = this.yDoc.getMap("fileYMap");
 
-        // Initialize the diff watcher
-        this.diffWatcher = new DiffWatcher(this.fileYMap, context, this.roomId);
+        // Observe all files for changes (even unopened files)
+        this.fileYMap.observeDeep((events) => {
+            for (const event of events) {
+                if (event.target instanceof Y.Text) {
+                    const relativePath = event.path[0] as string;
+                    if (event.transaction?.origin !== 'vscode-instructor') {
+                        this.changeTracker.recordChange(relativePath);
+                    }
+                }
+            }
+        });
 
         // Initialize providers
         this.notesCodeLensProvider = new NotesCodeLensProvider(
@@ -115,6 +145,13 @@ export class SessionManager {
         this.disposables.push(codeLensDisposable, inlineCompletionDisposable);
         this.disposables.push(...listenerDisposables);
         context.subscriptions.push(...this.disposables);
+
+        // Create bindings for documents that are already open (important after VS Code reload)
+        this.provider.on('sync', async (isSynced: boolean) => {
+            if (isSynced) {
+                await this.createBindingsForOpenDocuments();
+            }
+        });
     }
 
     /*
@@ -147,6 +184,14 @@ export class SessionManager {
 
     public toPosixPath(filePath: string): string {
         return filePath.replace(/\\/g, "/");
+    }
+
+    public getChangeTracker(): ChangeTracker {
+        return this.changeTracker;
+    }
+
+    public getBinding(relativePath: string): YTextVSCodeBinding | undefined {
+        return this.ytextBindings.get(relativePath);
     }
 
     private getWebSocketUrls(context: vscode.ExtensionContext) {
@@ -429,10 +474,16 @@ export class SessionManager {
                     const newRelativePath =
                         this.getRelativeFilePath(newFilePath);
 
+                    // Update ChangeTracker
+                    this.changeTracker.renameFile(oldRelativePath, newRelativePath);
+
                     // Check if it's a file or a directory
                     const fileStat = await vscode.workspace.fs.stat(newUri);
                     if (fileStat.type === vscode.FileType.File) {
-                        // Rename single file in fileYMap
+                        // Update the binding for renamed file
+                        await this.renameFileBinding(oldRelativePath, newRelativePath);
+                        
+                        // Rename in fileYMap
                         await this.renameFileInYMap(
                             oldRelativePath,
                             newRelativePath
@@ -465,6 +516,9 @@ export class SessionManager {
                             }
                         }
                     } else if (fileStat.type === vscode.FileType.Directory) {
+                        // Rename all bindings in the directory
+                        await this.renameDirectoryBindings(oldRelativePath, newRelativePath);
+                        
                         // Rename folder and all files within it
                         await this.renameAllFilesInDirectory(
                             oldRelativePath,
@@ -494,41 +548,50 @@ export class SessionManager {
 
                 // Handle removed workspace folders
                 for (const removedFolder of event.removed) {
+                    // Remove all bindings in the folder
+                    this.removeWorkspaceFolderBindings(removedFolder.name);
                     // Remove all files in the folder from fileYMap
                     this.removeAllFilesInWorkspaceFolder(removedFolder.name);
                 }
             }),
 
-            // Listen to file changes
-            vscode.workspace.onDidChangeTextDocument(async (event) => {
-                if (
-                    event.document === vscode.window.activeTextEditor?.document
-                ) {
-                    const correctFilePath = await this.getCorrectCasePath(
-                        event.document.uri.fsPath
-                    );
-                    const relativePath =
-                        this.getRelativeFilePath(correctFilePath);
-                    if (!relativePath) {
-                        return; // Ignore files that cannot be resolved to a relative path
+            vscode.workspace.onDidSaveTextDocument((document) => {
+                const relativePath = this.getRelativeFilePath(document.uri.fsPath);
+                if (relativePath && this.fileYMap.has(relativePath)) {
+                    // Only update snapshot if there are NO changes
+                    // If changes exist, instructor must use diff view to accept/rollback
+                    if (!this.changeTracker.hasChanges(relativePath)) {
+                        this.changeTracker.recordInstructorEdit(relativePath, document.getText());
+                    } else {
+                        // Show warning that changes must be resolved first
+                        vscode.window.showWarningMessage(
+                            `'${relativePath}' has unresolved changes. Please use the diff view to accept or rollback changes.`,
+                            "Review Changes"
+                        ).then(choice => {
+                            if (choice === "Review Changes") {
+                                vscode.commands.executeCommand("coducate.reviewChanges");
+                            }
+                        });
                     }
-
-                    // Warn the instructor if the file has differences tracked in DiffWatcher
-                    if (
-                        this.diffWatcher &&
-                        this.diffWatcher.getDiffFilesSet().has(relativePath)
-                    ) {
-                        await vscode.window.showWarningMessage(
-                            `'${relativePath}' contains changes from clients. Please resolve these changes before editing the file.`,
-                            "Ok"
-                        );
-                    }
-
-                    this.applyIncrementalChanges(
-                        relativePath,
-                        event.contentChanges
-                    );
                 }
+            }),
+
+            // Listen for when text documents are opened - create bindings
+            vscode.workspace.onDidOpenTextDocument(async (document) => {
+                const correctFilePath = await this.getCorrectCasePath(
+                    document.uri.fsPath
+                );
+                const relativePath = this.getRelativeFilePath(correctFilePath);
+                
+                if (relativePath && this.fileYMap.has(relativePath)) {
+                    await this.createOrUpdateBinding(relativePath, document);
+                }
+            }),
+
+            // Listen for when text documents are closed
+            vscode.workspace.onDidCloseTextDocument((document) => {
+                // Bindings are kept alive for seamless re-opening
+                // They will be disposed when files are deleted or session ends
             }),
 
             // Listen to cursor movement and selection changes
@@ -592,6 +655,9 @@ export class SessionManager {
                     const filePath = file.fsPath;
                     const relativeFilePath = this.getRelativeFilePath(filePath);
 
+                    // Remove from ChangeTracker
+                    this.changeTracker.removeFile(relativeFilePath);
+
                     // Check if any entries in fileYMap start with the folder path
                     const isFolder = Array.from(this.fileYMap.keys()).some(
                         (key) =>
@@ -599,18 +665,20 @@ export class SessionManager {
                     );
 
                     if (isFolder) {
-                        // If it's a folder, delete all entries within that path
+                        // Remove bindings for all files in the folder
                         for (const key of Array.from(this.fileYMap.keys())) {
                             if (
                                 key.startsWith(
                                     relativeFilePath + path.posix.sep
                                 )
                             ) {
+                                this.removeBinding(key);
                                 this.fileYMap.delete(key);
                             }
                         }
                     } else {
-                        // If it's a single file, delete only that specific entry
+                        // Remove binding for single file
+                        this.removeBinding(relativeFilePath);
                         if (this.fileYMap.has(relativeFilePath)) {
                             this.fileYMap.delete(relativeFilePath);
                         }
@@ -652,6 +720,11 @@ export class SessionManager {
 
             // Get the relative path with correct casing
             const relativeFilePath = this.getRelativeFilePath(correctFilePath);
+
+            // Create or update binding for this document
+            if (relativeFilePath && this.fileYMap.has(relativeFilePath)) {
+                await this.createOrUpdateBinding(relativeFilePath, editor.document);
+            }
 
             const position = editor.selections[0].active;
             const selection = editor.selections[0];
@@ -747,6 +820,206 @@ export class SessionManager {
         }
     }
 
+    public async getFileUriForPath(relativePath: string): Promise<vscode.Uri | null> {
+        const slashIndex = relativePath.indexOf("/");
+        if (slashIndex === -1) {
+            return null;
+        }
+
+        const workspaceFolderName = relativePath.substring(0, slashIndex);
+        const filePath = relativePath.substring(slashIndex + 1);
+
+        for (const folder of vscode.workspace.workspaceFolders || []) {
+            if (folder.name === workspaceFolderName) {
+                const fileUri = vscode.Uri.joinPath(folder.uri, filePath);
+                try {
+                    await vscode.workspace.fs.stat(fileUri);
+                    return fileUri;
+                } catch (error) {
+                    continue;
+                }
+            }
+        }
+        return null;
+    }
+
+    /*
+    * Binding Management
+    */
+
+    /**
+     * Create or update a YTextVSCodeBinding for a document
+     */
+    private async createOrUpdateBinding(
+        relativePath: string,
+        document: vscode.TextDocument
+    ): Promise<void> {
+        this.removeBinding(relativePath);
+
+        const yText = this.fileYMap.get(relativePath);
+        if (!yText) {
+            console.warn(`No Y.Text found for ${relativePath}`);
+            return;
+        }
+
+        // Create binding with change callback
+        const binding = new YTextVSCodeBinding(
+            yText,
+            document,
+            relativePath,
+            (path) => this.changeTracker.recordChange(path)
+        );
+        this.ytextBindings.set(relativePath, binding);
+
+        // Record current state as instructor snapshot
+        this.changeTracker.recordInstructorEdit(relativePath, document.getText());
+
+        if (!binding.isInSync()) {
+            await binding.syncFromYText();
+        }
+    }
+
+    /**
+     * Create bindings for all currently open documents that are in fileYMap.
+     * This is crucial for restoring the session after a VS Code reload.
+     */
+    private async createBindingsForOpenDocuments(): Promise<void> {
+        console.log('Creating bindings for open documents after sync...');
+        
+        for (const document of vscode.workspace.textDocuments) {
+            if (document.uri.scheme !== 'file') {
+                continue;
+            }
+
+            try {
+                const correctFilePath = await this.getCorrectCasePath(document.uri.fsPath);
+                const relativePath = this.getRelativeFilePath(correctFilePath);
+
+                if (relativePath && this.fileYMap.has(relativePath)) {
+                    if (!this.ytextBindings.has(relativePath)) {
+                        console.log(`Creating binding for already-open document: ${relativePath}`);
+                        await this.createOrUpdateBinding(relativePath, document);
+                    }
+                }
+            } catch (error) {
+                console.error(`Error creating binding for ${document.uri.fsPath}:`, error);
+            }
+        }
+        
+        console.log(`Bindings created. Total bindings: ${this.ytextBindings.size}`);
+    }
+
+    /**
+     * Remove a binding for a file
+     */
+    private removeBinding(relativePath: string): void {
+        const binding = this.ytextBindings.get(relativePath);
+        if (binding) {
+            binding.dispose();
+            this.ytextBindings.delete(relativePath);
+        }
+    }
+
+    /**
+     * Rename a binding when a file is renamed
+     */
+    private async renameFileBinding(
+        oldRelativePath: string,
+        newRelativePath: string
+    ): Promise<void> {
+        const binding = this.ytextBindings.get(oldRelativePath);
+        if (binding) {
+            binding.dispose();
+            this.ytextBindings.delete(oldRelativePath);
+        }
+
+        // Create new binding if the document is open
+        const document = vscode.workspace.textDocuments.find(
+            (doc) => this.getRelativeFilePath(doc.uri.fsPath) === newRelativePath
+        );
+        
+        if (document) {
+            await this.createOrUpdateBinding(newRelativePath, document);
+        }
+    }
+
+    /**
+     * Rename all bindings in a directory
+     */
+    private async renameDirectoryBindings(
+        oldRelativePath: string,
+        newRelativePath: string
+    ): Promise<void> {
+        const normalizedOldPath = this.toPosixPath(oldRelativePath);
+        const normalizedNewPath = this.toPosixPath(newRelativePath);
+
+        const bindingsToRename = Array.from(this.ytextBindings.keys()).filter(
+            (key) =>
+                key
+                    .toLowerCase()
+                    .startsWith(normalizedOldPath.toLowerCase() + path.posix.sep)
+        );
+
+        for (const oldKey of bindingsToRename) {
+            const suffix = oldKey.substring(normalizedOldPath.length);
+            const newKey = normalizedNewPath + suffix;
+            await this.renameFileBinding(oldKey, newKey);
+        }
+    }
+
+    /**
+     * Remove all bindings in a workspace folder
+     */
+    private removeWorkspaceFolderBindings(folderName: string): void {
+        const bindingsToRemove = Array.from(this.ytextBindings.keys()).filter(
+            (key) => key.startsWith(`${folderName}/`)
+        );
+
+        for (const key of bindingsToRemove) {
+            this.removeBinding(key);
+        }
+    }
+
+    public async showChangesDiff(relativePath: string) {
+        await this.changeTracker.showDiff(relativePath);
+    }
+
+    private async handleAcceptCurrentVersion(relativePath: string) {
+        const binding = this.ytextBindings.get(relativePath);
+        if (!binding) {
+            return;
+        }
+
+        const currentContent = binding.getYTextSnapshot();
+        
+        // Force update the instructor snapshot (clears changes flag)
+        this.changeTracker.forceUpdateInstructorSnapshot(relativePath, currentContent);
+    }
+
+    private async handleRollbackChanges(relativePath: string) {
+        const snapshot = this.changeTracker.getInstructorSnapshot(relativePath);
+        if (!snapshot) {
+            return;
+        }
+
+        const yText = this.fileYMap.get(relativePath);
+        if (!yText) {
+            return;
+        }
+
+        // Revert Y.Text to instructor's version
+        yText.doc?.transact(() => {
+            yText.delete(0, yText.length);
+            yText.insert(0, snapshot);
+        }, 'vscode-instructor');
+        
+        // After reverting, update the snapshot to match
+        const binding = this.ytextBindings.get(relativePath);
+        if (binding) {
+            this.changeTracker.forceUpdateInstructorSnapshot(relativePath, snapshot);
+        }
+    }
+
     // Function to get the relative file path within the workspace
     public getRelativeFilePath(filePath: string): string {
         const normalizedFilePath = this.toPosixPath(filePath);
@@ -780,9 +1053,9 @@ export class SessionManager {
         return filesWithExtension;
     }
 
-    // Function to check if a file has changes tracked in DiffWatcher
+    // Function to check if a file has changes tracked
     public hasChangesTracked(filePath: string): boolean {
-        return this.diffWatcher?.getDiffFilesSet().has(filePath) || false;
+        return this.changeTracker?.hasChanges(filePath) || false;
     }
 
     // Function to handle changes in excluded file extensions
@@ -989,6 +1262,14 @@ export class SessionManager {
                 );
                 const content = document.getText();
                 yText.insert(0, content);
+                
+                // Create binding if document is open in editor
+                const openDocument = vscode.workspace.textDocuments.find(
+                    (doc) => this.getRelativeFilePath(doc.uri.fsPath) === relativeFilePath
+                );
+                if (openDocument) {
+                    await this.createOrUpdateBinding(relativeFilePath, openDocument);
+                }
             } catch (error) {}
         }
     }
@@ -1294,35 +1575,20 @@ export class SessionManager {
         }
     }
 
-    // Function to apply incremental changes to Y.Text objects
-    private applyIncrementalChanges(
-        relativePath: string,
-        contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
-    ) {
-        const yText = this.fileYMap.get(relativePath);
-        if (!yText) {
-            return;
-        }
-
-        contentChanges.forEach((change) => {
-            const start = change.rangeOffset;
-            const length = change.rangeLength;
-
-            if (length > 0) {
-                yText.delete(start, length);
-            }
-
-            if (change.text.length > 0) {
-                yText.insert(start, change.text);
-            }
-        });
-    }
-
     /*
      * Cleanup and Disposal
      */
 
     public dispose() {
+        // Dispose all bindings
+        for (const binding of this.ytextBindings.values()) {
+            binding.dispose();
+        }
+        this.ytextBindings.clear();
+
+        // Dispose change tracker
+        this.changeTracker.dispose();
+
         // Disconnect from the WebSocket server
         this.wsControl.close();
 
@@ -1335,9 +1601,6 @@ export class SessionManager {
         // Disconnect and clean up the provider
         this.provider.disconnect();
         this.provider.destroy();
-
-        // Dispose the diff watcher
-        this.diffWatcher.dispose();
 
         // Dispose the terminal shell integration
         this.terminalShellIntegration.dispose();
