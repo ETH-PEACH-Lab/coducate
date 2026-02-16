@@ -35,6 +35,7 @@ export class SessionManager {
 
     constructor(
         roomId: string,
+        token: string,
         status: vscode.StatusBarItem,
         context: vscode.ExtensionContext
     ) {
@@ -44,7 +45,7 @@ export class SessionManager {
         this.yDoc = new Y.Doc();
         this.provider = new WebsocketProvider(
             yjsWebSocketUrl,
-            roomId,
+            `${roomId}?token=${token}`,
             this.yDoc,
             {
                 WebSocketPolyfill: require("ws"),
@@ -70,7 +71,7 @@ export class SessionManager {
         });
 
         // Separate WebSocket for custom messages
-        const bcChannelControlUrl = controlWebSocketUrl + "/" + roomId;
+        const bcChannelControlUrl = controlWebSocketUrl + "/" + roomId + "?token=" + token;
         this.wsControl = new ReconnectingWebSocket(bcChannelControlUrl, [], {
             WebSocket: WebSocket,
         });

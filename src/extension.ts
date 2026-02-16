@@ -193,9 +193,47 @@ export async function activate(context: vscode.ExtensionContext) {
     // Restore session if a roomId exists
     const roomId = context.workspaceState.get<string>(ROOM_ID_KEY);
     if (roomId) {
+        // Look up stored password to re-authenticate and get a fresh token
+        const existingSessions =
+            context.globalState.get<{
+                [key: string]: { roomId: string; password: string };
+            }>("coducate.sessions") || {};
+
+        const sessionEntry = Object.values(existingSessions).find(
+            (s) => s.roomId === roomId
+        );
+
+        if (!sessionEntry) {
+            vscode.window.showErrorMessage(
+                "Failed to restore session: no stored credentials found."
+            );
+            await context.workspaceState.update(ROOM_ID_KEY, undefined);
+            return;
+        }
+
+        let token: string | undefined;
+        try {
+            token = await verifyPassword(
+                getBackendHost(context),
+                sessionEntry.password,
+                roomId
+            );
+        } catch {
+            // Server may be unreachable — clear stale session
+        }
+
+        if (!token) {
+            vscode.window.showErrorMessage(
+                "Failed to restore session: authentication failed."
+            );
+            await context.workspaceState.update(ROOM_ID_KEY, undefined);
+            return;
+        }
+
         const sessionManagerFromInitailization = await initializeSession(
             context,
             roomId,
+            token,
             status
         );
 
@@ -253,9 +291,10 @@ export async function activate(context: vscode.ExtensionContext) {
 async function initializeSession(
     context: vscode.ExtensionContext,
     roomId: string,
+    token: string,
     status: vscode.StatusBarItem
 ): Promise<SessionManager | null> {
-    const sessionManager = new SessionManager(roomId, status, context);
+    const sessionManager = new SessionManager(roomId, token, status, context);
 
     context.subscriptions.push(sessionManager);
 
@@ -327,13 +366,14 @@ function getBackendHost(context: vscode.ExtensionContext): string {
 }
 
 /**
- * Verifys the password for a given room ID.
+ * Verifies the password for a given room ID.
+ * Returns the token on success, undefined on failure.
  */
 async function verifyPassword(
     backendHost: string,
     password: string,
     roomId: string
-) {
+): Promise<string | undefined> {
     const response = await fetch(`${backendHost}/api/verify-password`, {
         method: "POST",
         headers: {
@@ -344,7 +384,7 @@ async function verifyPassword(
 
     if (response.ok) {
         const data = await response.json();
-        return data.success;
+        return data.success ? data.token : undefined;
     }
 }
 
@@ -622,8 +662,45 @@ function registerCommands(
                     }
                 }
 
+                // Create the session via REST endpoint (creates room + returns auth token)
+                let token: string;
+                try {
+                    const response = await fetch(
+                        `${getBackendHost(context)}/api/create-session`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                roomId: newRoomId,
+                                password,
+                                taskDescriptionPath: taskDescriptionPath
+                                    ? taskDescriptionPath.fsPath
+                                    : "",
+                                learningGoalsPath: learningGoalsPath
+                                    ? learningGoalsPath.fsPath
+                                    : "",
+                            }),
+                        }
+                    );
+
+                    if (!response.ok) {
+                        const data = await response.json();
+                        throw new Error(
+                            data.message || "Failed to create session."
+                        );
+                    }
+
+                    const data = await response.json();
+                    token = data.token;
+                } catch (error) {
+                    vscode.window.showErrorMessage(
+                        error instanceof Error ? error.message : String(error)
+                    );
+                    return;
+                }
+
                 const sessionManagerFromInitailization =
-                    await initializeSession(context, newRoomId, status);
+                    await initializeSession(context, newRoomId, token, status);
 
                 if (!sessionManagerFromInitailization) {
                     vscode.window.showErrorMessage(
@@ -686,45 +763,6 @@ function registerCommands(
                     }
                 }
 
-                // Send session data to the server
-                try {
-                    await sessionManager.sendWebSocketRequest(
-                        "set_session_data_request",
-                        {
-                            roomId: newRoomId,
-                            password,
-                            taskDescriptionPath: taskDescriptionPath
-                                ? sessionManager.toPosixPath(
-                                      taskDescriptionPath.fsPath
-                                  )
-                                : "",
-                            learningGoalsPath: learningGoalsPath
-                                ? sessionManager.toPosixPath(
-                                      learningGoalsPath.fsPath
-                                  )
-                                : "",
-                        },
-                        {
-                            responseType: "set_session_data_response",
-                            validateResponse: (payload) =>
-                                payload.roomId === sessionManager?.getRoomId(),
-                            timeoutMessage:
-                                "Set session data request timed out.",
-                        }
-                    );
-                } catch (error) {
-                    vscode.window.showErrorMessage(
-                        error instanceof Error ? error.message : String(error)
-                    );
-
-                    // End the session if the password fails to set
-                    sessionManager.dispose();
-                    sessionManager = undefined;
-                    await context.workspaceState.update(ROOM_ID_KEY, undefined);
-
-                    return;
-                }
-
                 // Store the mapping of session name to room ID and password
                 existingSessions[sessionName] = { roomId: newRoomId, password };
 
@@ -779,9 +817,9 @@ function registerCommands(
                 const roomId = selectedSession.description;
                 const password = existingSessions[selectedSessionName].password;
 
-                let isPasswordValid = false;
+                let token: string | undefined;
                 try {
-                    isPasswordValid = await verifyPassword(
+                    token = await verifyPassword(
                         getBackendHost(context),
                         password,
                         roomId
@@ -793,7 +831,7 @@ function registerCommands(
                     return;
                 }
 
-                if (!isPasswordValid) {
+                if (!token) {
                     vscode.window.showErrorMessage(
                         "Invalid Room ID or Password."
                     );
@@ -801,7 +839,7 @@ function registerCommands(
                 }
 
                 const sessionManagerFromInitailization =
-                    await initializeSession(context, roomId, status);
+                    await initializeSession(context, roomId, token, status);
 
                 if (!sessionManagerFromInitailization) {
                     vscode.window.showErrorMessage(
