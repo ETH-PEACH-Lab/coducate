@@ -1193,20 +1193,29 @@ function registerCommands(
                                 continue;
                             }
 
+                            const targetSimpleIDNum =
+                                parseInt(targetSimpleID, 10);
+                            if (isNaN(targetSimpleIDNum)) {
+                                vscode.window.showErrorMessage(
+                                    "Client ID must be a number."
+                                );
+                                continue;
+                            }
+
                             let responsePayload;
                             try {
                                 responsePayload =
                                     await sessionManager?.sendWebSocketRequest(
                                         "grant_access_request",
-                                        { roomId, targetSimpleID },
+                                        { roomId, targetSimpleID: targetSimpleIDNum },
                                         {
                                             responseType:
                                                 "grant_access_response",
                                             validateResponse: (payload) =>
                                                 payload.simpleID ===
-                                                    targetSimpleID &&
+                                                    targetSimpleIDNum &&
                                                 payload.roomId === roomId,
-                                            timeoutMessage: `Grant write access request timed out. Client ${targetSimpleID} may not exist.`,
+                                            timeoutMessage: `Grant write access request timed out. Client ${targetSimpleIDNum} may not exist.`,
                                             waitForOpen: false,
                                         }
                                     );
@@ -1222,9 +1231,9 @@ function registerCommands(
                             const responseSimpleID = responsePayload?.simpleID;
 
                             // Only update access map and show notification if we got a valid response
-                            if (responseSimpleID) {
-                                // Add the user ID to the roomAccessMap
-                                clientSet.add(responseSimpleID);
+                            if (responseSimpleID !== undefined && responseSimpleID !== null) {
+                                // Add the user ID to the roomAccessMap (as string for serialization)
+                                clientSet.add(String(responseSimpleID));
                                 roomAccessMap.set(roomId, clientSet);
 
                                 // Convert Sets to arrays for serialization
@@ -1404,19 +1413,28 @@ function registerCommands(
                             return;
                         }
 
+                        const targetSimpleIDNum =
+                            parseInt(targetSimpleID, 10);
+                        if (isNaN(targetSimpleIDNum)) {
+                            vscode.window.showErrorMessage(
+                                "Client ID must be a number."
+                            );
+                            return;
+                        }
+
                         let responsePayload;
                         try {
                             responsePayload =
                                 await sessionManager?.sendWebSocketRequest(
                                     "revoke_access_request",
-                                    { roomId, targetSimpleID },
+                                    { roomId, targetSimpleID: targetSimpleIDNum },
                                     {
                                         responseType: "revoke_access_response",
                                         validateResponse: (payload) =>
                                             payload.simpleID ===
-                                                targetSimpleID &&
+                                                targetSimpleIDNum &&
                                             payload.roomId === roomId,
-                                        timeoutMessage: `Revoke write access request timed out. Client ${targetSimpleID} may still have write access.`,
+                                        timeoutMessage: `Revoke write access request timed out. Client ${targetSimpleIDNum} may still have write access.`,
                                         waitForOpen: false,
                                     }
                                 );
@@ -1431,9 +1449,9 @@ function registerCommands(
 
                         const responseSimpleID = responsePayload?.simpleID;
 
-                        if (responseSimpleID) {
+                        if (responseSimpleID !== undefined && responseSimpleID !== null) {
                             // Remove the specific client from the roomAccessMap
-                            clientSet.delete(responseSimpleID);
+                            clientSet.delete(String(responseSimpleID));
                             roomAccessMap.set(roomId, clientSet);
                             const serializedMap = JSON.stringify(
                                 Array.from(roomAccessMap.entries()).map(
