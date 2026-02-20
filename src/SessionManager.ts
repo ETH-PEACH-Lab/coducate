@@ -95,7 +95,7 @@ export class SessionManager {
                 if (event.target instanceof Y.Text) {
                     const relativePath = event.path[0] as string;
                     if (event.transaction?.origin !== 'vscode-instructor') {
-                        this.changeTracker.recordChange(relativePath);
+                        this.changeTracker.recordChange(relativePath, event.target.toString());
                     }
                 }
             }
@@ -877,7 +877,7 @@ export class SessionManager {
             yText,
             document,
             relativePath,
-            (path) => this.changeTracker.recordChange(path)
+            (path, content) => this.changeTracker.recordChange(path, content)
         );
         this.ytextBindings.set(relativePath, binding);
 

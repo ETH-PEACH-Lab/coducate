@@ -19,8 +19,9 @@ export class YTextVSCodeBinding {
     private disposables: vscode.Disposable[] = [];
     private isUpdatingFromVSCode = false;
     private yTextObserver: ((event: Y.YTextEvent) => void) | null = null;
-    private onClientChangeCallback: ((relativePath: string) => void) | null =
-        null;
+    private onClientChangeCallback:
+        | ((relativePath: string, content: string) => void)
+        | null = null;
 
     // Echo-back suppression
     private isApplyingRemote = false;
@@ -34,7 +35,7 @@ export class YTextVSCodeBinding {
         private ytext: Y.Text,
         private document: vscode.TextDocument,
         private relativePath: string,
-        onClientChange?: (relativePath: string) => void
+        onClientChange?: (relativePath: string, content: string) => void
     ) {
         this.onClientChangeCallback = onClientChange || null;
         this.setupBindings();
@@ -54,7 +55,10 @@ export class YTextVSCodeBinding {
             this.scheduleSyncToVSCode();
 
             if (this.onClientChangeCallback) {
-                this.onClientChangeCallback(this.relativePath);
+                this.onClientChangeCallback(
+                    this.relativePath,
+                    this.ytext.toString()
+                );
             }
         };
 

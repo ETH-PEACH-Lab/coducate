@@ -72,12 +72,25 @@ export class ChangeTracker {
         this.updateStatusBar();
     }
 
-    public recordChange(relativePath: string) {
-        if (this.instructorSnapshots.has(relativePath)) {
-            this.filesWithChanges.add(relativePath);
-            this.saveState();
-            this.updateStatusBar();
+    public recordChange(relativePath: string, currentContent?: string) {
+        const snapshot = this.instructorSnapshots.get(relativePath);
+        if (snapshot === undefined) {
+            return;
         }
+
+        // If current content matches the snapshot, remove from changes
+        if (currentContent !== undefined && currentContent === snapshot) {
+            if (this.filesWithChanges.has(relativePath)) {
+                this.filesWithChanges.delete(relativePath);
+                this.saveState();
+                this.updateStatusBar();
+            }
+            return;
+        }
+
+        this.filesWithChanges.add(relativePath);
+        this.saveState();
+        this.updateStatusBar();
     }
 
     /**
