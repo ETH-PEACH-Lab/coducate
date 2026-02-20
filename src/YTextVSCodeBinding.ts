@@ -3,14 +3,32 @@ import * as Y from "yjs";
 
 /**
  * Bidirectional binding between a VS Code TextDocument and a Y.Text object.
- * This ensures perfect synchronization while tracking changes from different sources.
+ *
+ * Design:
+ * - Remote Y.Text changes are debounced and applied as a single atomic
+ *   full-content replacement after a short quiet period (100ms). This avoids
+ *   broken intermediate states from incremental deltas with stale offsets.
+ * - Echo-back prevention uses TWO layers:
+ *   1. `isApplyingRemote` flag: set while we're applying a remote change,
+ *      suppresses all onDidChangeTextDocument events.
+ *   2. `suppressUpToVersion`: version-based suppression catches any events
+ *      that fire after the flag is cleared.
+ * - VS Code -> Y.Text (instructor edits) uses incremental operations.
  */
 export class YTextVSCodeBinding {
     private disposables: vscode.Disposable[] = [];
-    private isUpdatingFromYjs = false;
     private isUpdatingFromVSCode = false;
     private yTextObserver: ((event: Y.YTextEvent) => void) | null = null;
-    private onClientChangeCallback: ((relativePath: string) => void) | null = null;
+    private onClientChangeCallback: ((relativePath: string) => void) | null =
+        null;
+
+    // Echo-back suppression
+    private isApplyingRemote = false;
+    private suppressUpToVersion = -1;
+
+    // Debounce timer for remote changes
+    private syncTimer: ReturnType<typeof setTimeout> | null = null;
+    private static readonly SYNC_DELAY_MS = 100;
 
     constructor(
         private ytext: Y.Text,
@@ -22,23 +40,20 @@ export class YTextVSCodeBinding {
         this.setupBindings();
     }
 
-    /**
-     * Set up bidirectional synchronization between Y.Text and VS Code document
-     */
     private setupBindings() {
-        // Y.Text -> VS Code: Listen to remote changes
+        // Y.Text -> VS Code: Listen to remote changes, debounce into a
+        // single atomic update
         this.yTextObserver = (event: Y.YTextEvent) => {
-            // Ignore updates that originated from this VS Code instance (instructor)
-            if (this.isUpdatingFromVSCode || event.transaction.origin === 'vscode-instructor') {
+            if (
+                this.isUpdatingFromVSCode ||
+                event.transaction.origin === "vscode-instructor"
+            ) {
                 return;
             }
 
-            // This is a change from a web client
-            this.isUpdatingFromYjs = true;
-            this.applyYTextChangesToVSCode(event);
-            
-            // Notify that a web client made a change
-            if (this.onClientChangeCallback && event.transaction.origin !== 'vscode-instructor') {
+            this.scheduleSyncToVSCode();
+
+            if (this.onClientChangeCallback) {
                 this.onClientChangeCallback(this.relativePath);
             }
         };
@@ -46,76 +61,96 @@ export class YTextVSCodeBinding {
         this.ytext.observe(this.yTextObserver);
 
         // VS Code -> Y.Text: Listen to local document changes (instructor edits)
-        const changeDisposable = vscode.workspace.onDidChangeTextDocument((event) => {
-            if (event.document !== this.document || this.isUpdatingFromYjs) {
-                return;
-            }
+        const changeDisposable = vscode.workspace.onDidChangeTextDocument(
+            (event) => {
+                if (event.document !== this.document) {
+                    return;
+                }
 
-            this.isUpdatingFromVSCode = true;
-            this.applyVSCodeChangesToYText(event.contentChanges);
-            this.isUpdatingFromVSCode = false;
-        });
+                // Layer 1: Suppress while applying remote changes.
+                if (this.isApplyingRemote) {
+                    return;
+                }
+
+                // Layer 2: Version-based suppression for late-arriving events.
+                if (event.document.version <= this.suppressUpToVersion) {
+                    return;
+                }
+
+                this.isUpdatingFromVSCode = true;
+                this.applyVSCodeChangesToYText(event.contentChanges);
+                this.isUpdatingFromVSCode = false;
+            }
+        );
 
         this.disposables.push(changeDisposable);
     }
 
     /**
-     * Apply Y.Text changes to the VS Code document
+     * Schedule a debounced sync from Y.Text to VS Code.
+     * Each new remote change resets the timer. When typing stops (or pauses
+     * for SYNC_DELAY_MS), we apply one atomic full-content replacement.
      */
-    private async applyYTextChangesToVSCode(event: Y.YTextEvent) {
+    private scheduleSyncToVSCode() {
+        if (this.syncTimer) {
+            clearTimeout(this.syncTimer);
+        }
+
+        this.syncTimer = setTimeout(() => {
+            this.syncTimer = null;
+            this.applyYTextToVSCode();
+        }, YTextVSCodeBinding.SYNC_DELAY_MS);
+    }
+
+    /**
+     * Apply Y.Text content to VS Code as a single atomic replacement.
+     * The document jumps from its current state directly to the correct state
+     * — no broken intermediate states visible to the user.
+     */
+    private async applyYTextToVSCode() {
+        const ytextContent = this.ytext.toString();
+        const vscodeContent = this.document.getText();
+
+        if (ytextContent === vscodeContent) {
+            return;
+        }
+
+        this.isApplyingRemote = true;
+
         try {
-            const editor = vscode.window.visibleTextEditors.find(
-                (e) => e.document === this.document
+            const fullRange = new vscode.Range(
+                this.document.positionAt(0),
+                this.document.positionAt(vscodeContent.length)
             );
 
-            if (!editor) {
-                // Document is not currently visible
-                this.isUpdatingFromYjs = false;
-                return;
-            }
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(this.document.uri, fullRange, ytextContent);
 
-            // Calculate the changes from the Y.Text delta
-            const success = await editor.edit(
-                (editBuilder) => {
-                    let index = 0;
-
-                    event.delta.forEach((op) => {
-                        if (op.retain !== undefined) {
-                            index += op.retain;
-                        } else if (op.insert !== undefined) {
-                            const insertText = typeof op.insert === 'string' ? op.insert : '';
-                            const position = this.document.positionAt(index);
-                            editBuilder.insert(position, insertText);
-                            index += insertText.length;
-                        } else if (op.delete !== undefined) {
-                            const startPos = this.document.positionAt(index);
-                            const endPos = this.document.positionAt(index + op.delete);
-                            editBuilder.delete(new vscode.Range(startPos, endPos));
-                        }
-                    });
-                },
-                {
-                    undoStopBefore: false,
-                    undoStopAfter: false,
-                }
-            );
+            this.suppressUpToVersion = this.document.version + 1;
+            const success = await vscode.workspace.applyEdit(edit);
 
             if (!success) {
-                console.error(`Failed to apply Y.Text changes to VS Code for ${this.relativePath}`);
+                console.error(
+                    `Failed to sync Y.Text to VS Code for ${this.relativePath}`
+                );
             }
         } catch (error) {
-            console.error(`Error applying Y.Text changes to VS Code for ${this.relativePath}:`, error);
+            console.error(
+                `Error syncing Y.Text to VS Code for ${this.relativePath}:`,
+                error
+            );
         } finally {
-            this.isUpdatingFromYjs = false;
+            this.isApplyingRemote = false;
         }
     }
 
     /**
      * Apply VS Code document changes to Y.Text (instructor edits)
      */
-    private applyVSCodeChangesToYText(contentChanges: readonly vscode.TextDocumentContentChangeEvent[]) {
+    private applyVSCodeChangesToYText(
+        contentChanges: readonly vscode.TextDocumentContentChangeEvent[]
+    ) {
         try {
-            // Apply changes within a Y.js transaction with 'vscode-instructor' origin
             this.ytext.doc?.transact(() => {
                 contentChanges.forEach((change) => {
                     const start = change.rangeOffset;
@@ -129,92 +164,47 @@ export class YTextVSCodeBinding {
                         this.ytext.insert(start, change.text);
                     }
                 });
-            }, 'vscode-instructor'); // Mark as instructor change
+            }, "vscode-instructor");
         } catch (error) {
-            console.error(`Error applying VS Code changes to Y.Text for ${this.relativePath}:`, error);
+            console.error(
+                `Error applying VS Code changes to Y.Text for ${this.relativePath}:`,
+                error
+            );
         }
     }
 
     /**
-     * Synchronize the current state: update VS Code from Y.Text
+     * Synchronize the current state: update VS Code from Y.Text.
      */
     public async syncFromYText() {
-        if (this.isUpdatingFromVSCode || this.isUpdatingFromYjs) {
-            return;
-        }
-
-        const ytextContent = this.ytext.toString();
-        const vscodeContent = this.document.getText();
-
-        if (ytextContent !== vscodeContent) {
-            this.isUpdatingFromYjs = true;
-            
-            try {
-                const editor = vscode.window.visibleTextEditors.find(
-                    (e) => e.document === this.document
-                );
-
-                if (editor) {
-                    const fullRange = new vscode.Range(
-                        this.document.positionAt(0),
-                        this.document.positionAt(vscodeContent.length)
-                    );
-
-                    await editor.edit(
-                        (editBuilder) => {
-                            editBuilder.replace(fullRange, ytextContent);
-                        },
-                        {
-                            undoStopBefore: false,
-                            undoStopAfter: false,
-                        }
-                    );
-                }
-            } finally {
-                this.isUpdatingFromYjs = false;
-            }
-        }
+        await this.applyYTextToVSCode();
     }
 
-    /**
-     * Get a snapshot of the current Y.Text content
-     */
     public getYTextSnapshot(): string {
         return this.ytext.toString();
     }
 
-    /**
-     * Get the current VS Code document content
-     */
     public getVSCodeContent(): string {
         return this.document.getText();
     }
 
-    /**
-     * Check if the binding is currently in sync
-     */
     public isInSync(): boolean {
         return this.ytext.toString() === this.document.getText();
     }
 
-    /**
-     * Get the relative path of the bound document
-     */
     public getRelativePath(): string {
         return this.relativePath;
     }
 
-    /**
-     * Get the VS Code document
-     */
     public getDocument(): vscode.TextDocument {
         return this.document;
     }
 
-    /**
-     * Clean up the binding
-     */
     public dispose() {
+        if (this.syncTimer) {
+            clearTimeout(this.syncTimer);
+            this.syncTimer = null;
+        }
         if (this.yTextObserver) {
             this.ytext.unobserve(this.yTextObserver);
             this.yTextObserver = null;

@@ -849,13 +849,22 @@ export class SessionManager {
     */
 
     /**
-     * Create or update a YTextVSCodeBinding for a document
+     * Create or update a YTextVSCodeBinding for a document.
+     * If a binding already exists for this path, it is kept alive (no
+     * destroy/recreate) to avoid gaps where remote changes would be lost.
      */
     private async createOrUpdateBinding(
         relativePath: string,
         document: vscode.TextDocument
     ): Promise<void> {
-        this.removeBinding(relativePath);
+        const existing = this.ytextBindings.get(relativePath);
+        if (existing) {
+            // Binding already exists — just ensure it is in sync
+            if (!existing.isInSync()) {
+                await existing.syncFromYText();
+            }
+            return;
+        }
 
         const yText = this.fileYMap.get(relativePath);
         if (!yText) {
