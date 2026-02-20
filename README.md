@@ -44,9 +44,9 @@ Control participant permissions to foster collaborative coding.
     -   Grant editing permissions to specific participants or all participants.
 -   **Command:** `Coducate: Revoke Write Access`
     -   Revoke editing permissions from specific participants or all participants.
--   **Diff-Editor View:** Compare the instructor's code with the participants' code in a side-by-side view to manage contributions effectively.
-    -   **Accept Changes:** Write the participants' code back to the instructor's VS Code editor.
-    -   **Reject Changes:** Discard the participants' code and retain the instructor's version, rolling back the participants' changes in the web view.
+-   **Diff-Editor View:** When participants make changes, a status bar item shows the number of files with unresolved changes. Click it to open a side-by-side diff editor comparing the current version (left) with the rollback version (right). The rollback version is the instructor's last saved or accepted version before any participant changes were detected.
+    -   **Accept Current Version:** Keep the participants' changes and continue from there.
+    -   **Restore Rollback Version:** Revert the file to the instructor's version before the participant changes, broadcasting the rollback to all participants in real-time.
 
 **Demo:**
 
