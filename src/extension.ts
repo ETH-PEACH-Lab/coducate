@@ -361,7 +361,7 @@ async function initializeSession(
  */
 function getBackendHost(context: vscode.ExtensionContext): string {
     return context.extensionMode === vscode.ExtensionMode.Production
-        ? "https://coducate.me" // Production environment
+        ? "https://coducate.live" // Production environment
         : "http://localhost:1234"; // Development environment
 }
 
