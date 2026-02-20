@@ -1,5 +1,16 @@
 # Change Log
 
+## [0.6.0] - 2026-02-20
+
+### Changed
+
+-   Migrated production domain from coducate.me to coducate.live
+-   Improved session security with token-based authentication
+
+### Fixed
+
+-   Fixed synchronization issues between the shared editor and VS Code files when web participants are rapidly making changes, ensuring a more consistent collaborative experience
+
 ## [0.5.2] - 2025-10-22
 
 ### Changed
