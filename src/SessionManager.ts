@@ -94,8 +94,12 @@ export class SessionManager {
             for (const event of events) {
                 if (event.target instanceof Y.Text) {
                     const relativePath = event.path[0] as string;
+                    const currentContent = event.target.toString();
                     if (event.transaction?.origin !== 'vscode-instructor') {
-                        this.changeTracker.recordChange(relativePath, event.target.toString());
+                        this.changeTracker.recordChange(relativePath, currentContent);
+                    } else if (this.changeTracker.hasChanges(relativePath)) {
+                        // Instructor edit: check if content now matches the snapshot
+                        this.changeTracker.recordChange(relativePath, currentContent);
                     }
                 }
             }
