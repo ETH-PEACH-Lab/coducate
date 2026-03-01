@@ -186,11 +186,12 @@ The `coducate.exclusion.excludedDirectories` setting is used to exclude director
 }
 ```
 
-The `coducate.exclusion.excludedFileExtensions` setting is used to exclude files with specific extensions from syncing. By default, the following file extensions are excluded:
+The `coducate.exclusion.excludedFilePatterns` setting is used to exclude files with specific file name patterns (suffixes) from syncing. By default, the following file patterns (suffixes) are excluded:
 
 ```json
 {
-    "coducate.exclusion.excludedFileExtensions": [
+    "coducate.exclusion.excludedFilePatterns": [
+        ".coducate.json",
         ".DS_Store",
         ".env",
         ".env.local",

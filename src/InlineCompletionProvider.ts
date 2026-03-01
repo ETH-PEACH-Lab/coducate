@@ -99,7 +99,8 @@ export class InlineCompletionProvider
         filePath: string,
         currentLine: number
     ): { line: number; code: string } | null {
-        const notes = this.notesCodeLensProvider?.storedNotes[filePath];
+        const relativePath = this.notesCodeLensProvider?.toRelative(filePath);
+        const notes = this.notesCodeLensProvider?.storedNotes[relativePath];
         if (!notes) {
             return null;
         }

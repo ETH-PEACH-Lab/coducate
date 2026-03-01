@@ -17,7 +17,7 @@ export class SessionManager {
     private yDoc: Y.Doc;
     private fileYMap: Y.Map<Y.Text>; // A shared map to store file names and their corresponding Y.Text objects
     private excludedDirectories: Set<string> = new Set();
-    private excludedFileExtensions: Set<string> = new Set();
+    private excludedFilePatterns: Set<string> = new Set();
     private notesCodeLensProvider: NotesCodeLensProvider;
     private inlineCompletionProvider: InlineCompletionProvider;
     private terminalShellIntegration: TerminalShellIntegration;
@@ -109,7 +109,9 @@ export class SessionManager {
         this.notesCodeLensProvider = new NotesCodeLensProvider(
             context,
             roomId,
-            this.getRelativeFilePath
+            this.getRelativeFilePath,
+            vscode.workspace.workspaceFolders?.[0]?.uri,
+            vscode.workspace.workspaceFolders?.[0]?.name || ""
         );
 
         this.inlineCompletionProvider = new InlineCompletionProvider(
@@ -137,11 +139,13 @@ export class SessionManager {
         // Load settings
         this.loadSettings();
 
-        // Sync initial files from each workspace folder
+        // Sync initial files from each workspace folder (skip virtual folders like git SCM)
         vscode.workspace.workspaceFolders?.forEach((folder) => {
-            this.addAllFilesInWorkspaceFolder(
-                this.toPosixPath(folder.uri.fsPath)
-            );
+            if (folder.uri.scheme === "file") {
+                this.addAllFilesInWorkspaceFolder(
+                    this.toPosixPath(folder.uri.fsPath)
+                );
+            }
         });
 
         const listenerDisposables = this.setupVSCodeListeners();
@@ -583,6 +587,9 @@ export class SessionManager {
 
             // Listen for when text documents are opened - create bindings
             vscode.workspace.onDidOpenTextDocument(async (document) => {
+                if (document.uri.scheme !== "file") {
+                    return;
+                }
                 const correctFilePath = await this.getCorrectCasePath(
                     document.uri.fsPath
                 );
@@ -601,6 +608,9 @@ export class SessionManager {
 
             // Listen to cursor movement and selection changes
             vscode.window.onDidChangeTextEditorSelection(async (event) => {
+                if (event.textEditor.document.uri.scheme !== "file") {
+                    return;
+                }
                 if (event.textEditor === vscode.window.activeTextEditor) {
                     const correctFilePath = await this.getCorrectCasePath(
                         event.textEditor.document.uri.fsPath
@@ -658,6 +668,17 @@ export class SessionManager {
             vscode.workspace.onDidDeleteFiles(async (event) => {
                 for (const file of event.files) {
                     const filePath = file.fsPath;
+
+                    // Check if .coducate.json was deleted
+                    if (path.basename(filePath) === ".coducate.json") {
+                        vscode.window.showWarningMessage(
+                            "The .coducate.json file was deleted. It will be re-created to preserve note data.",
+                            "OK"
+                        );
+                        this.notesCodeLensProvider.triggerCoducateJsonWrite();
+                        continue;
+                    }
+
                     const relativeFilePath = this.getRelativeFilePath(filePath);
 
                     // Remove from ChangeTracker
@@ -698,7 +719,7 @@ export class SessionManager {
                         "coducate.exclusion.excludedDirectories"
                     ) ||
                     event.affectsConfiguration(
-                        "coducate.exclusion.excludedFileExtensions"
+                        "coducate.exclusion.excludedFilePatterns"
                     ) ||
                     event.affectsConfiguration(
                         "coducate.terminal.mirrorOnlyCoducateTerminals"
@@ -719,6 +740,9 @@ export class SessionManager {
         editor: vscode.TextEditor | undefined
     ) {
         if (editor) {
+            if (editor.document.uri.scheme !== "file") {
+                return;
+            }
             const editorPath = editor.document.uri.fsPath;
 
             const correctFilePath = await this.getCorrectCasePath(editorPath);
@@ -1072,36 +1096,40 @@ export class SessionManager {
         return this.changeTracker?.hasChanges(filePath) || false;
     }
 
-    // Function to handle changes in excluded file extensions
-    private async handleFileExtensionChanges(
+    // Function to handle changes in excluded file patterns
+    private async handleFilePatternChanges(
         oldExcluded: Set<string>,
         newExcluded: Set<string>,
         taskData: any
     ) {
-        const addedExtensions = Array.from(newExcluded).filter(
-            (ext) => !oldExcluded.has(ext)
+        const addedPatterns = Array.from(newExcluded).filter(
+            (pattern) => !oldExcluded.has(pattern)
         );
-        const removedExtensions = Array.from(oldExcluded).filter(
-            (ext) => !newExcluded.has(ext)
+        const removedPatterns = Array.from(oldExcluded).filter(
+            (pattern) => !newExcluded.has(pattern)
         );
 
-        // Remove files with newly excluded extensions
-        for (const ext of addedExtensions) {
-            const fileHasExtension = (file: string) => file.endsWith(ext);
+        // Remove files matching newly excluded patterns
+        for (const pattern of addedPatterns) {
+            const fileMatchesPattern = (file: string) =>
+                file.endsWith(pattern);
 
             let hasChanges = false;
             for (const file of this.fileYMap.keys()) {
-                if (fileHasExtension(file) && this.hasChangesTracked(file)) {
+                if (
+                    fileMatchesPattern(file) &&
+                    this.hasChangesTracked(file)
+                ) {
                     hasChanges = true;
                     await vscode.window.showWarningMessage(
-                        `'${file}' contains client changes. Please resolve these changes before excluding '${ext}' files.`,
+                        `'${file}' contains client changes. Please resolve these changes before excluding '${pattern}' files.`,
                         "Ok"
                     );
 
-                    // Remove the file extension from the excluded list in the settings
+                    // Remove the pattern from the excluded list in the settings
                     await this.removeSettingValue(
-                        "exclusion.excludedFileExtensions",
-                        ext
+                        "exclusion.excludedFilePatterns",
+                        pattern
                     );
 
                     break;
@@ -1109,13 +1137,13 @@ export class SessionManager {
             }
 
             if (!hasChanges) {
-                await this.removeFilesByExtension(ext, taskData);
+                await this.removeFilesByPattern(pattern, taskData);
             }
         }
 
-        // Add back files with newly included extensions
-        for (const ext of removedExtensions) {
-            await this.addFilesByExtension(ext);
+        // Add back files matching newly included patterns
+        for (const pattern of removedPatterns) {
+            await this.addFilesByPattern(pattern);
         }
     }
 
@@ -1184,7 +1212,7 @@ export class SessionManager {
             []
         );
         const excludedExts = config.get<string[]>(
-            "exclusion.excludedFileExtensions",
+            "exclusion.excludedFilePatterns",
             []
         );
         const mirrorOnlyCoducateTerminals = config.get<boolean>(
@@ -1193,10 +1221,10 @@ export class SessionManager {
         );
 
         const oldExcludedDirectories = this.excludedDirectories;
-        const oldExcludedFileExtensions = this.excludedFileExtensions;
+        const oldExcludedFilePatterns = this.excludedFilePatterns;
 
         this.excludedDirectories = new Set(excludedDirs);
-        this.excludedFileExtensions = new Set(excludedExts);
+        this.excludedFilePatterns = new Set(excludedExts);
         this.terminalShellIntegration.setMirrorOnlyCoducateTerminals(
             mirrorOnlyCoducateTerminals
         );
@@ -1228,19 +1256,21 @@ export class SessionManager {
             taskData
         );
 
-        // Handle changes in excluded file extensions
-        this.handleFileExtensionChanges(
-            oldExcludedFileExtensions,
-            this.excludedFileExtensions,
+        // Handle changes in excluded file patterns
+        this.handleFilePatternChanges(
+            oldExcludedFilePatterns,
+            this.excludedFilePatterns,
             taskData
         );
     }
 
-    // Function to check if a file is excluded in settings
+    // Function to check if a file matches any excluded file pattern
     private isExcludedFile(filePath: string): boolean {
         const normalizedPath = this.toPosixPath(filePath);
-        const fileExtension = path.extname(normalizedPath);
-        return this.excludedFileExtensions.has(fileExtension);
+        const fileName = path.posix.basename(normalizedPath);
+        return Array.from(this.excludedFilePatterns).some((pattern) =>
+            fileName.endsWith(pattern)
+        );
     }
 
     // Function to check if a directory is excluded in settings
@@ -1288,8 +1318,8 @@ export class SessionManager {
         }
     }
 
-    // Function to add all files with a specific extension to fileYMap
-    private async addFilesByExtension(extension: string) {
+    // Function to add all files matching a specific pattern to fileYMap
+    private async addFilesByPattern(extension: string) {
         const workspaces = vscode.workspace.workspaceFolders;
 
         if (!workspaces) {
@@ -1409,8 +1439,8 @@ export class SessionManager {
         }
     }
 
-    // Function to remove all files with a specific extension from fileYMap
-    private async removeFilesByExtension(extension: string, taskData: any) {
+    // Function to remove all files matching a specific pattern from fileYMap
+    private async removeFilesByPattern(extension: string, taskData: any) {
         for (const key of Array.from(this.fileYMap.keys())) {
             if (key.endsWith(extension)) {
                 if (key === taskData.taskDescriptionPath) {
@@ -1467,7 +1497,7 @@ export class SessionManager {
     }
 
     /**
-     * Removes a value from a specified setting key (`excludedDirectories` or `excludedFileExtensions`).
+     * Removes a value from a specified setting key (`excludedDirectories` or `excludedFilePatterns`).
      * If the setting becomes empty and matches the default, it is reset to `undefined` to ensure VS Code properly reverts to default settings.
      */
     private async removeSettingValue(settingKey: string, value: string) {

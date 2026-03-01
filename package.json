@@ -75,12 +75,13 @@
                     ],
                     "description": "Directories to exclude from syncing."
                 },
-                "coducate.exclusion.excludedFileExtensions": {
+                "coducate.exclusion.excludedFilePatterns": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     },
                     "default": [
+                        ".coducate.json",
                         ".DS_Store",
                         ".env",
                         ".env.local",
@@ -90,7 +91,7 @@
                         ".env.example",
                         ".ipynb"
                     ],
-                    "description": "File extensions to exclude from syncing."
+                    "description": "File name patterns (suffixes) to exclude from syncing."
                 },
                 "coducate.terminal.mirrorOnlyCoducateTerminals": {
                     "type": "boolean",
@@ -167,6 +168,10 @@
             {
                 "command": "coducate.toggleSuggestions",
                 "title": "Coducate: Toggle Suggestions"
+            },
+            {
+                "command": "coducate.exportSession",
+                "title": "Coducate: Export Session"
             }
         ],
         "terminal": {
@@ -328,6 +333,7 @@
     },
     "dependencies": {
         "@vscode/prompt-tsx": "^0.3.0-alpha.13",
+        "jszip": "^3.10.1",
         "reconnecting-websocket": "^4.4.0",
         "unique-names-generator": "^4.7.1",
         "ws": "^8.18.0",

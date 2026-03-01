@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
 import * as fs from "fs/promises";
+import * as crypto from "crypto";
+import JSZip from "jszip";
 import {
     uniqueNamesGenerator,
     adjectives,
@@ -14,6 +16,13 @@ import { showTmpNotification } from "./tmpNotifications";
 
 // Key to store the room ID in the workspace state
 const ROOM_ID_KEY = "coducateRoomId";
+
+interface StoredSession {
+    roomId: string;
+    password: string;
+    createdAt?: string;
+    coducateJsonHash?: string;
+}
 
 export async function activate(context: vscode.ExtensionContext) {
     let sessionManager: SessionManager | undefined;
@@ -195,13 +204,13 @@ export async function activate(context: vscode.ExtensionContext) {
     if (roomId) {
         // Look up stored password to re-authenticate and get a fresh token
         const existingSessions =
-            context.globalState.get<{
-                [key: string]: { roomId: string; password: string };
-            }>("coducate.sessions") || {};
+            context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
 
-        const sessionEntry = Object.values(existingSessions).find(
-            (s) => s.roomId === roomId
+        const sessionEntryPair = Object.entries(existingSessions).find(
+            ([, s]) => s.roomId === roomId
         );
+        const sessionEntry = sessionEntryPair?.[1];
+        const sessionEntryName = sessionEntryPair?.[0] || "";
 
         if (!sessionEntry) {
             vscode.window.showErrorMessage(
@@ -245,6 +254,13 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         sessionManager = sessionManagerFromInitailization;
+        subscribeToCoducateJsonHash(
+            context,
+            sessionManager,
+            roomId,
+            sessionEntryName,
+            sessionEntry.createdAt
+        );
 
         const showRoomIdMessage = async (message: string) => {
             const copyToClipboard = await vscode.window.showInformationMessage(
@@ -266,6 +282,44 @@ export async function activate(context: vscode.ExtensionContext) {
         sessionManager,
         status,
     });
+
+    // Outside-session edit warning: warn once per VS Code session if user edits
+    // files in a workspace that has .coducate.json but no active session
+    let outsideSessionWarningShown = false;
+    const outsideEditListener = vscode.workspace.onDidChangeTextDocument(
+        async () => {
+            if (outsideSessionWarningShown) {
+                return;
+            }
+
+            // Check if a session is active
+            const activeRoomId =
+                context.workspaceState.get<string>(ROOM_ID_KEY);
+            if (activeRoomId) {
+                return;
+            }
+
+            const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+            if (!wsRoot) {
+                return;
+            }
+
+            try {
+                await vscode.workspace.fs.stat(
+                    vscode.Uri.joinPath(wsRoot, ".coducate.json")
+                );
+            } catch {
+                return; // No .coducate.json
+            }
+
+            outsideSessionWarningShown = true;
+            vscode.window.showWarningMessage(
+                "A .coducate.json file exists but no Coducate session is active. Editing files may make stored notes unusable. Start a session first.",
+                "OK"
+            );
+        }
+    );
+    context.subscriptions.push(outsideEditListener);
 
     if (tabGroupsState && !workspaceFolders) {
         // A new session was started so tabGroupsState is available but workspaceFolders is not
@@ -378,6 +432,7 @@ async function verifyPassword(
         method: "POST",
         headers: {
             "Content-Type": "application/json",
+            "X-Coducate-Source": "vscode",
         },
         body: JSON.stringify({ password, roomId }),
     });
@@ -404,6 +459,40 @@ async function isRoomExisting(
     });
 
     return response.ok;
+}
+
+/**
+ * Subscribe to .coducate.json hash updates and persist the hash in globalState.
+ */
+function subscribeToCoducateJsonHash(
+    context: vscode.ExtensionContext,
+    sessionManager: SessionManager,
+    roomId: string,
+    sessionName: string,
+    createdAt?: string
+) {
+    const notesCodeLensProvider = sessionManager.getNotesCodeLensProvider();
+    notesCodeLensProvider.setSessionName(sessionName);
+    if (createdAt) {
+        notesCodeLensProvider.setCreatedAt(createdAt);
+    }
+
+    notesCodeLensProvider.onDidWriteCoducateJson((hash: string) => {
+        const sessions =
+            context.globalState.get<Record<string, StoredSession>>(
+                "coducate.sessions"
+            ) || {};
+        for (const session of Object.values(sessions)) {
+            if (session.roomId === roomId) {
+                session.coducateJsonHash = hash;
+                break;
+            }
+        }
+        context.globalState.update("coducate.sessions", sessions);
+    });
+
+    // Trigger an initial write
+    notesCodeLensProvider.triggerCoducateJsonWrite();
 }
 
 /**
@@ -508,27 +597,157 @@ function registerCommands(
                 }
             }
 
-            const sessionType = await vscode.window.showQuickPick([
-                {
-                    label: "$(coducate-create) Create New Session",
-                    value: "New Session",
-                },
-                {
-                    label: "$(coducate-join) Join Existing Session",
-                    value: "Existing Session",
-                },
-            ]);
+            // Check if .coducate.json exists in the workspace root (session package)
+            let packageMetadata: {
+                version: number;
+                name: string;
+                notes: {
+                    [filePath: string]: {
+                        line: number;
+                        code: string;
+                        title: string;
+                    }[];
+                };
+                metadata?: { createdAt?: string };
+            } | null = null;
+
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+            if (workspaceRoot) {
+                const coducateJsonUri = vscode.Uri.joinPath(
+                    workspaceRoot,
+                    ".coducate.json"
+                );
+                try {
+                    const raw =
+                        await vscode.workspace.fs.readFile(coducateJsonUri);
+                    const parsed = JSON.parse(
+                        Buffer.from(raw).toString("utf8")
+                    );
+                    if (parsed.version === 1 && parsed.notes) {
+                        packageMetadata = parsed;
+                    }
+                } catch {
+                    // No .coducate.json found — proceed normally
+                }
+            }
+
+            let sessionType: { label: string; value: string } | undefined;
+
+            if (packageMetadata) {
+                const proceed = await vscode.window.showWarningMessage(
+                    `A .coducate.json file was detected. Hidden notes from "${packageMetadata.name}" will be initialized.`,
+                    "Proceed",
+                    "Cancel"
+                );
+                if (proceed !== "Proceed") {
+                    return;
+                }
+            }
+
+            if (!sessionType) {
+                sessionType = await vscode.window.showQuickPick([
+                    {
+                        label: "$(coducate-create) Create New Session",
+                        value: "New Session",
+                    },
+                    {
+                        label: "$(coducate-join) Join Existing Session",
+                        value: "Existing Session",
+                    },
+                ]);
+            }
 
             if (!sessionType) {
                 return;
             }
 
             const existingSessions =
-                context.globalState.get<{
-                    [key: string]: { roomId: string; password: string };
-                }>("coducate.sessions") || {};
+                context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
 
             if (sessionType.value === "New Session") {
+                // Hard limit: 100 sessions per user
+                const sessionCount = Object.keys(existingSessions).length;
+                if (sessionCount >= 100) {
+                    vscode.window.showErrorMessage(
+                        "You have reached the maximum of 100 sessions. Please delete some sessions via 'Coducate: Manage Sessions' before creating new ones."
+                    );
+                    return;
+                }
+
+                // Prompt about old sessions (>3 months)
+                const threeMonthsAgo = new Date(
+                    Date.now() - 90 * 24 * 60 * 60 * 1000
+                );
+                const oldSessions = Object.entries(existingSessions).filter(
+                    ([, session]) => {
+                        if (!session.createdAt) {
+                            return true; // Treat sessions without createdAt as old
+                        }
+                        return new Date(session.createdAt) < threeMonthsAgo;
+                    }
+                );
+
+                if (oldSessions.length > 0) {
+                    const deleteOld = await vscode.window.showQuickPick(
+                        oldSessions.map(([name, { roomId }]) => ({
+                            label: name,
+                            description: roomId,
+                            picked: true,
+                        })),
+                        {
+                            canPickMany: true,
+                            placeHolder: `You have ${oldSessions.length} session(s) older than 3 months. Select sessions to delete, or press Escape to skip.`,
+                        }
+                    );
+
+                    if (deleteOld && deleteOld.length > 0) {
+                        for (const session of deleteOld) {
+                            const sessionData =
+                                existingSessions[session.label];
+                            if (sessionData) {
+                                // Soft-delete on backend (best effort)
+                                try {
+                                    await fetch(
+                                        `${getBackendHost(context)}/api/delete-session`,
+                                        {
+                                            method: "POST",
+                                            headers: {
+                                                "Content-Type":
+                                                    "application/json",
+                                            },
+                                            body: JSON.stringify({
+                                                roomId: sessionData.roomId,
+                                                password: sessionData.password,
+                                            }),
+                                        }
+                                    );
+                                } catch {
+                                    // Best effort
+                                }
+
+                                // Remove stored notes
+                                const notesKey = `storedNotes-${sessionData.roomId}`;
+                                await context.globalState.update(
+                                    notesKey,
+                                    undefined
+                                );
+
+                                // Remove from local storage
+                                delete existingSessions[session.label];
+                            }
+                        }
+
+                        await context.globalState.update(
+                            "coducate.sessions",
+                            existingSessions
+                        );
+
+                        showTmpNotification(
+                            `Deleted ${deleteOld.length} old session(s).`
+                        );
+                    }
+                }
+
                 let sessionName;
                 do {
                     sessionName = await vscode.window.showInputBox({
@@ -710,6 +929,12 @@ function registerCommands(
                 }
 
                 sessionManager = sessionManagerFromInitailization;
+                subscribeToCoducateJsonHash(
+                    context,
+                    sessionManager,
+                    newRoomId,
+                    sessionName
+                );
 
                 if (taskDescriptionPath) {
                     try {
@@ -764,7 +989,11 @@ function registerCommands(
                 }
 
                 // Store the mapping of session name to room ID and password
-                existingSessions[sessionName] = { roomId: newRoomId, password };
+                existingSessions[sessionName] = {
+                    roomId: newRoomId,
+                    password,
+                    createdAt: new Date().toISOString(),
+                };
 
                 await context.globalState.update(
                     "coducate.sessions",
@@ -789,6 +1018,37 @@ function registerCommands(
                 showRoomIdMessage(
                     `Live coding session started. Room ID: ${newRoomId}`
                 );
+
+                // Load notes from session package if detected
+                if (packageMetadata && sessionManager) {
+                    const notesCodeLensProvider =
+                        sessionManager.getNotesCodeLensProvider();
+                    const currentFolderName =
+                        vscode.workspace.workspaceFolders?.[0]?.name || "";
+
+                    const allNotes: {
+                        [relativePath: string]: {
+                            line: number;
+                            code: string;
+                            title: string;
+                        }[];
+                    } = {};
+
+                    for (const [filePath, notes] of Object.entries(
+                        packageMetadata.notes
+                    )) {
+                        if (notes.length === 0) {
+                            continue;
+                        }
+                        const relativePath = `${currentFolderName}/${filePath}`;
+                        allNotes[relativePath] = notes.map((n) => ({ ...n }));
+                    }
+
+                    notesCodeLensProvider.importNotes(allNotes);
+                    showTmpNotification(
+                        `Notes from "${packageMetadata.name}" loaded.`
+                    );
+                }
             } else if (sessionType.value === "Existing Session") {
                 // Convert sessions to a displayable list
                 const sessionChoices = Object.entries(existingSessions).map(
@@ -838,6 +1098,50 @@ function registerCommands(
                     return;
                 }
 
+                // Hash check: verify .coducate.json integrity
+                const storedHash =
+                    existingSessions[selectedSessionName].coducateJsonHash;
+                const workspaceRoot =
+                    vscode.workspace.workspaceFolders?.[0]?.uri;
+                if (workspaceRoot) {
+                    const coducateJsonUri = vscode.Uri.joinPath(
+                        workspaceRoot,
+                        ".coducate.json"
+                    );
+                    try {
+                        const raw =
+                            await vscode.workspace.fs.readFile(coducateJsonUri);
+                        const content = Buffer.from(raw).toString("utf8");
+                        const currentHash = crypto
+                            .createHash("sha256")
+                            .update(content)
+                            .digest("hex");
+
+                        if (storedHash && currentHash !== storedHash) {
+                            const action =
+                                await vscode.window.showWarningMessage(
+                                    "The .coducate.json file has been modified since the session was last ended or it originates from a different session. Notes may be out of sync or may not match the files and positions.",
+                                    "Proceed Anyway",
+                                    "Cancel"
+                                );
+                            if (action !== "Proceed Anyway") {
+                                return;
+                            }
+                        }
+                    } catch {
+                        // File doesn't exist
+                        const action =
+                            await vscode.window.showWarningMessage(
+                                "No .coducate.json file found. A new one will be created when the session starts.",
+                                "Proceed",
+                                "Cancel"
+                            );
+                        if (action !== "Proceed") {
+                            return;
+                        }
+                    }
+                }
+
                 const sessionManagerFromInitailization =
                     await initializeSession(context, roomId, token, status);
 
@@ -849,6 +1153,13 @@ function registerCommands(
                 }
 
                 sessionManager = sessionManagerFromInitailization;
+                subscribeToCoducateJsonHash(
+                    context,
+                    sessionManager,
+                    roomId,
+                    selectedSessionName,
+                    existingSessions[selectedSessionName].createdAt
+                );
 
                 await context.workspaceState.update(ROOM_ID_KEY, roomId);
 
@@ -868,6 +1179,83 @@ function registerCommands(
                 showRoomIdMessage(
                     `Live coding session joined. Room ID: ${roomId}`
                 );
+
+                // Apply notes: remove hidden code from files (files are in "complete" state)
+                const notesCodeLensProvider =
+                    sessionManager.getNotesCodeLensProvider();
+                const allNotes = notesCodeLensProvider.exportNotes();
+                const filesWithNotes = Object.entries(allNotes).filter(
+                    ([, notes]) => notes.length > 0
+                );
+
+                if (filesWithNotes.length > 0) {
+                    notesCodeLensProvider.isApplyingNotes = true;
+                    try {
+                        for (const [relativePath, notes] of filesWithNotes) {
+                            const fileUri =
+                                await sessionManager.getFileUriForPath(
+                                    relativePath
+                                );
+                            if (!fileUri) {
+                                continue;
+                            }
+
+                            try {
+                                const document =
+                                    await vscode.workspace.openTextDocument(
+                                        fileUri
+                                    );
+                                const editor =
+                                    await vscode.window.showTextDocument(
+                                        document,
+                                        {
+                                            preview: false,
+                                            preserveFocus: true,
+                                        }
+                                    );
+
+                                // Get notes with line numbers adjusted for the complete file
+                                const completeNotes =
+                                    notesCodeLensProvider.getNotesForCompleteFile(
+                                        relativePath
+                                    );
+
+                                // Use applyNotesToFile to get the modified content
+                                const currentContent = document.getText();
+                                const { content: appliedContent, appliedNotes } =
+                                    notesCodeLensProvider.applyNotesToFile(
+                                        currentContent,
+                                        completeNotes
+                                    );
+
+                                // Replace entire document content
+                                const fullRange = new vscode.Range(
+                                    new vscode.Position(0, 0),
+                                    document.lineAt(document.lineCount - 1)
+                                        .range.end
+                                );
+                                await editor.edit((editBuilder) => {
+                                    editBuilder.replace(fullRange, appliedContent);
+                                });
+
+                                // Update stored notes with applied-state line numbers
+                                notesCodeLensProvider.storedNotes[relativePath] =
+                                    appliedNotes;
+
+                                await document.save();
+                            } catch {
+                                // Skip files that can't be opened
+                            }
+                        }
+
+                        // Save updated notes
+                        notesCodeLensProvider.importNotes(
+                            notesCodeLensProvider.storedNotes
+                        );
+                    } finally {
+                        notesCodeLensProvider.isApplyingNotes = false;
+                    }
+                }
             }
         }
     );
@@ -876,6 +1264,19 @@ function registerCommands(
         "coducate.endSession",
         async () => {
             if (sessionManager) {
+                // Notify backend to end the session (best effort)
+                try {
+                    await sessionManager.sendWebSocketRequest(
+                        "end_session_request",
+                        { roomId: sessionManager.getRoomId() },
+                        { waitForResponse: false }
+                    );
+                    // Small delay to let the message be sent before disposing
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                } catch {
+                    // Best effort -- backend cleanup will handle it via DB hygiene
+                }
+
                 sessionManager.dispose();
                 sessionManager = undefined;
                 await context.workspaceState.update(ROOM_ID_KEY, undefined);
@@ -959,9 +1360,7 @@ function registerCommands(
         async () => {
             // Retrieve the stored session name-to-room ID-password mappings
             let existingSessions =
-                context.globalState.get<{
-                    [key: string]: { roomId: string; password: string };
-                }>("coducate.sessions") || {};
+                context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
 
             if (Object.keys(existingSessions).length === 0) {
                 showTmpNotification("No sessions available to manage.");
@@ -1085,11 +1484,33 @@ function registerCommands(
                     }
 
                     if (confirmDelete === "Yes") {
+                        const sessionData =
+                            existingSessions[selectedSessionName];
+
+                        // Soft-delete on backend (best effort)
+                        try {
+                            await fetch(
+                                `${getBackendHost(context)}/api/delete-session`,
+                                {
+                                    method: "POST",
+                                    headers: {
+                                        "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify({
+                                        roomId: sessionData.roomId,
+                                        password: sessionData.password,
+                                    }),
+                                }
+                            );
+                        } catch {
+                            // Best effort
+                        }
+
                         // Delete the stored notes for the session
-                        const notesKey = `storedNotes-${existingSessions[selectedSessionName].roomId}`;
+                        const notesKey = `storedNotes-${sessionData.roomId}`;
                         await context.globalState.update(notesKey, undefined);
 
-                        // Delete the selected session
+                        // Delete the selected session locally
                         delete existingSessions[selectedSessionName];
                         await context.globalState.update(
                             "coducate.sessions",
@@ -2032,7 +2453,14 @@ function registerCommands(
             const notesCodeLensProvider =
                 sessionManager?.getNotesCodeLensProvider();
 
-            const notes = notesCodeLensProvider?.storedNotes[filePath];
+            if (!notesCodeLensProvider) {
+                vscode.window.showErrorMessage("No active session found.");
+                return;
+            }
+
+            // Convert absolute file path to relative for storedNotes lookup
+            const relativePath = sessionManager!.getRelativeFilePath(filePath);
+            const notes = notesCodeLensProvider.storedNotes[relativePath];
             if (!notes) {
                 vscode.window.showErrorMessage("No notes found for this file.");
                 return;
@@ -2076,7 +2504,7 @@ function registerCommands(
                 );
             } else if (choice.value === "delete") {
                 // Delete the note
-                notesCodeLensProvider?.removeNote(filePath, line);
+                notesCodeLensProvider.removeNote(filePath, line);
                 showTmpNotification("Note at line " + (line + 1) + " deleted.");
             }
         }
@@ -2177,6 +2605,123 @@ function registerCommands(
         }
     );
 
+    const exportSessionCommand = vscode.commands.registerCommand(
+        "coducate.exportSession",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage(
+                    "No active session found. Please start a session first."
+                );
+                return;
+            }
+
+            const notesCodeLensProvider =
+                sessionManager.getNotesCodeLensProvider();
+            const fileYMap = sessionManager.getFileYMap();
+            const fileKeys = Array.from(fileYMap.keys());
+
+            if (fileKeys.length === 0) {
+                vscode.window.showErrorMessage(
+                    "No files found in the current session."
+                );
+                return;
+            }
+
+            // Prompt for package name
+            const defaultName =
+                vscode.workspace.workspaceFolders?.[0]?.name || "session";
+            const packageName = await vscode.window.showInputBox({
+                prompt: "Enter a name for the session package.",
+                value: defaultName,
+            });
+
+            if (packageName === undefined) {
+                return; // User cancelled
+            }
+
+            const zip = new JSZip();
+            const notes: {
+                [filePath: string]: {
+                    line: number;
+                    code: string;
+                    title: string;
+                }[];
+            } = {};
+
+            // Collect file contents and reconstruct complete files
+            for (const relativePath of fileKeys) {
+                const fileUri =
+                    await sessionManager.getFileUriForPath(relativePath);
+                if (!fileUri) {
+                    continue;
+                }
+
+                try {
+                    const rawContent =
+                        await vscode.workspace.fs.readFile(fileUri);
+                    const currentContent =
+                        Buffer.from(rawContent).toString("utf8");
+
+                    // Strip workspace folder prefix for the ZIP path
+                    const slashIndex = relativePath.indexOf("/");
+                    const zipPath =
+                        slashIndex !== -1
+                            ? relativePath.substring(slashIndex + 1)
+                            : relativePath;
+
+                    // Add file as-is (applied state with placeholder lines)
+                    zip.file(zipPath, currentContent);
+
+                    // Use applied-state note line numbers (matching the file content)
+                    const fileNotes =
+                        notesCodeLensProvider.storedNotes[relativePath];
+                    if (fileNotes && fileNotes.length > 0) {
+                        notes[zipPath] = fileNotes.map((n) => ({ ...n }));
+                    }
+                } catch {
+                    // Skip files that can't be read
+                }
+            }
+
+            // Add metadata file inside the ZIP
+            const metadata = {
+                version: 1,
+                name: packageName,
+                notes,
+                metadata: {
+                    createdAt: new Date().toISOString(),
+                },
+            };
+            zip.file(".coducate.json", JSON.stringify(metadata, null, 2));
+
+            // Show save dialog
+            const saveUri = await vscode.window.showSaveDialog({
+                filters: {
+                    "Coducate Session Package": ["zip"],
+                },
+                defaultUri: vscode.Uri.file(
+                    `${
+                        vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ""
+                    }/${packageName}.zip`
+                ),
+            });
+
+            if (!saveUri) {
+                return; // User cancelled
+            }
+
+            const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+            await vscode.workspace.fs.writeFile(
+                saveUri,
+                zipBuffer
+            );
+
+            showTmpNotification(
+                `Session exported to ${saveUri.fsPath}.`
+            );
+        }
+    );
+
     context.subscriptions.push(
         startCommand,
         endCommand,
@@ -2197,7 +2742,8 @@ function registerCommands(
         handleNoteActionCommand,
         removeNoteCommand,
         toggleSuggestionsCommand,
-        reviewChangesCommand
+        reviewChangesCommand,
+        exportSessionCommand
     );
 }
 
