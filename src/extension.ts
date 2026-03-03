@@ -275,6 +275,25 @@ export async function activate(context: vscode.ExtensionContext) {
         };
 
         showRoomIdMessage(`Live coding session restored. Room ID: ${roomId}`);
+
+        // Show note count after Y.js sync completes
+        const provider = sessionManager.getProvider();
+        const onSync = (isSynced: boolean) => {
+            if (isSynced) {
+                provider.off('sync', onSync);
+                const notesCodeLensProvider =
+                    sessionManager!.getNotesCodeLensProvider();
+                const allNotes = notesCodeLensProvider.exportNotes();
+                const noteCount = Object.values(allNotes).reduce(
+                    (sum, notes) => sum + notes.length,
+                    0
+                );
+                if (noteCount > 0) {
+                    showTmpNotification(`${noteCount} note(s) loaded.`);
+                }
+            }
+        };
+        provider.on('sync', onSync);
     }
 
     // Register commands
@@ -929,12 +948,6 @@ function registerCommands(
                 }
 
                 sessionManager = sessionManagerFromInitailization;
-                subscribeToCoducateJsonHash(
-                    context,
-                    sessionManager,
-                    newRoomId,
-                    sessionName
-                );
 
                 if (taskDescriptionPath) {
                     try {
@@ -1041,14 +1054,28 @@ function registerCommands(
                             continue;
                         }
                         const relativePath = `${currentFolderName}/${filePath}`;
-                        allNotes[relativePath] = notes.map((n) => ({ ...n }));
+                        // Convert from 1-indexed (.coducate.json) to 0-indexed (internal)
+                        allNotes[relativePath] = notes.map((n) => ({ ...n, line: n.line - 1 }));
                     }
 
                     notesCodeLensProvider.importNotes(allNotes);
+                    const noteCount = Object.values(allNotes).reduce(
+                        (sum, notes) => sum + notes.length,
+                        0
+                    );
                     showTmpNotification(
-                        `Notes from "${packageMetadata.name}" loaded.`
+                        `${noteCount} note(s) from "${packageMetadata.name}" loaded.`
                     );
                 }
+
+                // Subscribe after notes are imported so the initial write
+                // includes the imported notes instead of an empty object
+                subscribeToCoducateJsonHash(
+                    context,
+                    sessionManager,
+                    newRoomId,
+                    sessionName
+                );
             } else if (sessionType.value === "Existing Session") {
                 // Convert sessions to a displayable list
                 const sessionChoices = Object.entries(existingSessions).map(
@@ -1180,81 +1207,17 @@ function registerCommands(
                     `Live coding session joined. Room ID: ${roomId}`
                 );
 
-                // Apply notes: remove hidden code from files (files are in "complete" state)
+                // Notes are already in applied state (loaded from globalState,
+                // files synced via Y.js) — no need to re-apply them.
                 const notesCodeLensProvider =
                     sessionManager.getNotesCodeLensProvider();
                 const allNotes = notesCodeLensProvider.exportNotes();
-                const filesWithNotes = Object.entries(allNotes).filter(
-                    ([, notes]) => notes.length > 0
+                const noteCount = Object.values(allNotes).reduce(
+                    (sum, notes) => sum + notes.length,
+                    0
                 );
-
-                if (filesWithNotes.length > 0) {
-                    notesCodeLensProvider.isApplyingNotes = true;
-                    try {
-                        for (const [relativePath, notes] of filesWithNotes) {
-                            const fileUri =
-                                await sessionManager.getFileUriForPath(
-                                    relativePath
-                                );
-                            if (!fileUri) {
-                                continue;
-                            }
-
-                            try {
-                                const document =
-                                    await vscode.workspace.openTextDocument(
-                                        fileUri
-                                    );
-                                const editor =
-                                    await vscode.window.showTextDocument(
-                                        document,
-                                        {
-                                            preview: false,
-                                            preserveFocus: true,
-                                        }
-                                    );
-
-                                // Get notes with line numbers adjusted for the complete file
-                                const completeNotes =
-                                    notesCodeLensProvider.getNotesForCompleteFile(
-                                        relativePath
-                                    );
-
-                                // Use applyNotesToFile to get the modified content
-                                const currentContent = document.getText();
-                                const { content: appliedContent, appliedNotes } =
-                                    notesCodeLensProvider.applyNotesToFile(
-                                        currentContent,
-                                        completeNotes
-                                    );
-
-                                // Replace entire document content
-                                const fullRange = new vscode.Range(
-                                    new vscode.Position(0, 0),
-                                    document.lineAt(document.lineCount - 1)
-                                        .range.end
-                                );
-                                await editor.edit((editBuilder) => {
-                                    editBuilder.replace(fullRange, appliedContent);
-                                });
-
-                                // Update stored notes with applied-state line numbers
-                                notesCodeLensProvider.storedNotes[relativePath] =
-                                    appliedNotes;
-
-                                await document.save();
-                            } catch {
-                                // Skip files that can't be opened
-                            }
-                        }
-
-                        // Save updated notes
-                        notesCodeLensProvider.importNotes(
-                            notesCodeLensProvider.storedNotes
-                        );
-                    } finally {
-                        notesCodeLensProvider.isApplyingNotes = false;
-                    }
+                if (noteCount > 0) {
+                    showTmpNotification(`${noteCount} note(s) loaded.`);
                 }
             }
         }
@@ -2428,9 +2391,9 @@ function registerCommands(
                     });
 
                     showTmpNotification(
-                        `Note created at lines ${startLine + 1} to ${
-                            endLine + 1
-                        }.`
+                        startLine === endLine
+                            ? `Note created at line ${startLine + 1}.`
+                            : `Note created at lines ${startLine + 1} to ${endLine + 1}.`
                     );
 
                     notesCodeLensProvider?.refresh();
@@ -2676,7 +2639,8 @@ function registerCommands(
                     const fileNotes =
                         notesCodeLensProvider.storedNotes[relativePath];
                     if (fileNotes && fileNotes.length > 0) {
-                        notes[zipPath] = fileNotes.map((n) => ({ ...n }));
+                        // Convert from 0-indexed (internal) to 1-indexed (human-readable)
+                        notes[zipPath] = fileNotes.map((n) => ({ ...n, line: n.line + 1 }));
                     }
                 } catch {
                     // Skip files that can't be read

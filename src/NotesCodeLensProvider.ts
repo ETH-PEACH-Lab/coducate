@@ -255,15 +255,16 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
         const completeNotes: { [filePath: string]: Note[] } = {};
 
         for (const relativePath of Object.keys(this.storedNotes)) {
-            const notes = this.getNotesForCompleteFile(relativePath);
-            if (notes.length > 0) {
+            const notes = this.storedNotes[relativePath];
+            if (notes && notes.length > 0) {
                 // Strip workspace folder prefix (e.g., "myProject/src/index.ts" -> "src/index.ts")
                 const slashIndex = relativePath.indexOf("/");
                 const strippedPath =
                     slashIndex !== -1
                         ? relativePath.substring(slashIndex + 1)
                         : relativePath;
-                completeNotes[strippedPath] = notes;
+                // Convert from 0-indexed (internal) to 1-indexed (human-readable)
+                completeNotes[strippedPath] = notes.map(n => ({ ...n, line: n.line + 1 }));
             }
         }
 
