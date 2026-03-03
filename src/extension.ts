@@ -1227,6 +1227,9 @@ function registerCommands(
         "coducate.endSession",
         async () => {
             if (sessionManager) {
+                // Save all open files before ending the session
+                await vscode.workspace.saveAll();
+
                 // Notify backend to end the session (best effort)
                 try {
                     await sessionManager.sendWebSocketRequest(
@@ -1239,6 +1242,9 @@ function registerCommands(
                 } catch {
                     // Best effort -- backend cleanup will handle it via DB hygiene
                 }
+
+                // Clear change tracker state so stale snapshots don't persist across sessions
+                sessionManager.getChangeTracker().clear();
 
                 sessionManager.dispose();
                 sessionManager = undefined;
