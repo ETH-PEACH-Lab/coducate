@@ -275,25 +275,6 @@ export async function activate(context: vscode.ExtensionContext) {
         };
 
         showRoomIdMessage(`Live coding session restored. Room ID: ${roomId}`);
-
-        // Show note count after Y.js sync completes
-        const provider = sessionManager.getProvider();
-        const onSync = (isSynced: boolean) => {
-            if (isSynced) {
-                provider.off('sync', onSync);
-                const notesCodeLensProvider =
-                    sessionManager!.getNotesCodeLensProvider();
-                const allNotes = notesCodeLensProvider.exportNotes();
-                const noteCount = Object.values(allNotes).reduce(
-                    (sum, notes) => sum + notes.length,
-                    0
-                );
-                if (noteCount > 0) {
-                    showTmpNotification(`${noteCount} note(s) loaded.`);
-                }
-            }
-        };
-        provider.on('sync', onSync);
     }
 
     // Register commands
@@ -1216,9 +1197,7 @@ function registerCommands(
                     (sum, notes) => sum + notes.length,
                     0
                 );
-                if (noteCount > 0) {
-                    showTmpNotification(`${noteCount} note(s) loaded.`);
-                }
+                showTmpNotification(`${noteCount} note(s) loaded.`);
             }
         }
     );
