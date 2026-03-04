@@ -2,7 +2,7 @@
     "name": "coducate",
     "displayName": "Coducate",
     "description": "Streamlines Instructor-Led Live Coding",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "publisher": "coducate",
     "icon": "public/coducate-logo.png",
     "galleryBanner": {
