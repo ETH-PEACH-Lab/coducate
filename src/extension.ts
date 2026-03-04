@@ -1017,6 +1017,11 @@ function registerCommands(
                 if (packageMetadata && sessionManager) {
                     const notesCodeLensProvider =
                         sessionManager.getNotesCodeLensProvider();
+
+                    // Set the session name before importing notes, since
+                    // importNotes triggers an async .coducate.json write
+                    notesCodeLensProvider.setSessionName(sessionName);
+
                     const currentFolderName =
                         vscode.workspace.workspaceFolders?.[0]?.name || "";
 
