@@ -4,7 +4,7 @@
 
 ### Added
 
--   Added `Coducate: Export Session` command to export a session as a ZIP file containing workspace files and hidden notes stored in a `.coducate.json` file. Files and directories matching `coducate.exclusion.excludedFilePatterns` or `coducate.exclusion.excludedDirectories` are excluded from the exported ZIP file.
+-   Added `Coducate: Export Session` command to export a session as a ZIP file containing workspace files and hidden notes (stored in a `.coducate.json` file). Files and directories matching `coducate.exclusion.excludedFilePatterns` or `coducate.exclusion.excludedDirectories` are excluded from the exported ZIP file.
 
 ### Changed
 
