@@ -1,11 +1,30 @@
 # Change Log
 
+## [0.7.0] - 2026-03-04
+
+### Added
+
+-   Added `Coducate: Export Session` command to export a session as a ZIP file containing workspace files and hidden notes stored in a `.coducate.json` file. Files and directories matching `coducate.exclusion.excludedFilePatterns` or `coducate.exclusion.excludedDirectories` are excluded from the exported ZIP file.
+
+### Changed
+
+-   Renamed the `coducate.exclusion.excludedFileExtensions` setting to `coducate.exclusion.excludedFilePatterns` to better reflect that entries are filename patterns, not just file extensions
+
+-   Web participants can no longer join a session after it has been ended by the instructor. If a web participants was joined before the session was ended, they will be removed from the session and see a message indicating that the session has ended.
+
+### Fixed
+
+-   Fixed some files not being properly excluded from synchronization due to incorrect file extension matching
+-   Fixed WebSocket reconnection loops after ending a session
+-   Improved session security by preventing participants from hijacking another participant's client ID
+
 ## [0.6.0] - 2026-02-20
 
 ### Changed
 
 -   Migrated production domain from coducate.me to coducate.live
 -   Improved session security with token-based authentication
+-   Changes made by web participants are now immediately visible in the instructor's VS Code, without needing to accept changes first. The instructor can still choose to accept the current version of the file or roll back to the last accepted version using the diff view.
 
 ### Fixed
 
