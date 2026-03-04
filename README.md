@@ -1,6 +1,6 @@
 # Coducate
 
-**Coducate** makes instructor-led live coding sessions more interactive, structured, and efficient. Whether you are teaching programming concepts, demonstrating coding techniques, or guiding participants through hands-on exercises, Coducate simplifies the process with powerful tools. It allows instructors to share their code in real-time, grant participants write access for interactive participation, and manage contributions with a built-in diff editor. Features like AI-powered code suggestions, terminal mirroring, interactive notes, and a customizable **[web view](https://coducate.live/live-coding)**—inspired by PowerPoint’s presentation mode—help create an engaging and structured learning environment. The web view **separates the instructor’s view from the participants’ view**, allowing instructors to maintain their preferred setup while participants access a distraction-free interface on any browser-accessible device. This also enables the use of in-editor notes and AI code suggestions without exposing them to participants.
+**Coducate** makes instructor-led live coding sessions more interactive, structured, and efficient. Whether you are teaching programming concepts, demonstrating coding techniques, or guiding participants through hands-on exercises, Coducate simplifies the process with powerful tools. It allows instructors to share their code in real-time, grant participants write access for interactive participation, and manage contributions with a built-in diff editor. Features like AI-powered code suggestions, terminal mirroring, interactive notes, and a customizable **[web view](https://coducate.live/live-coding)** help create an engaging and structured learning environment. The web view **separates the instructor's view from the participants' view**, allowing instructors to maintain their preferred setup while participants access a distraction-free interface on any browser-accessible device. This also enables the use of in-editor notes and AI code suggestions without exposing them to participants.
 
 ## Features and Commands
 
@@ -13,14 +13,6 @@ Effortlessly begin or end your live coding sessions with Coducate.
 -   **Command:** `Coducate: End Session`
     -   Ends the current live coding session.
 
-**Demo:**
-
-**Start Session:**
-![Start Session](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/start_session.gif)
-
-**End Session:**
-![End Session](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/end_session.gif)
-
 ---
 
 ### Manage Sessions
@@ -30,9 +22,14 @@ Easily manage past and ongoing sessions.
 -   **Command:** `Coducate: Manage Sessions`
     -   View, rename, or delete previous sessions and retrieve room passwords.
 
-**Demo:**
+---
 
-![Manage Sessions](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/manage_sessions.gif)
+### Export Sessions
+
+Export your session as a distributable ZIP file.
+
+-   **Command:** `Coducate: Export Session`
+    -   Exports the current session's workspace files and hidden notes (stored in a `.coducate.json` file) as a ZIP file. Files and directories matching `coducate.exclusion.excludedFilePatterns` or `coducate.exclusion.excludedDirectories` are excluded from the export.
 
 ---
 
@@ -47,10 +44,6 @@ Control participant permissions to foster collaborative coding.
 -   **Diff-Editor View:** When participants make changes, a status bar item shows the number of files with unresolved changes. Click it to open a side-by-side diff editor comparing the current version (left) with the rollback version (right). The rollback version is the instructor's last saved or accepted version before any participant changes were detected.
     -   **Accept Current Version:** Keep the participants' changes and continue from there.
     -   **Restore Rollback Version:** Revert the file to the instructor's version before the participant changes, broadcasting the rollback to all participants in real-time.
-
-**Demo:**
-
-![Grant and Revoke Write Access](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/grant_revoke_write_access.gif)
 
 ---
 
@@ -71,10 +64,6 @@ Provide participants with a real-time view of the instructor's terminal activity
 
 -   Use the `coducate.terminal.mirrorOnlyCoducateTerminals` setting to control whether all integrated terminals or only Coducate Terminals are mirrored to the web view.
 
-**Demo:**
-
-![Create Coducate Terminal](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/mirror_terminal.gif)
-
 ---
 
 ### Notes Management
@@ -91,10 +80,6 @@ Enhance your session with dynamic in-editor notes.
 
 -   **Command:** `Coducate: Remove Notes`
     -   Delete notes from the current file, the entire workspace, or specific notes by clicking their Code Lens.
-
-**Demo:**
-
-![Create and Remove Notes](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/create_use_remove_notes.gif)
 
 ---
 
@@ -135,19 +120,11 @@ Modify the web view appearance to create an optimal teaching environment, such a
 -   **Command:** `Coducate: Change Theme`
     -   Switch between light and dark themes in the instructor's web view.
 
-**Demo:**
-
-![Customize Web View](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/adjust_web_view.gif)
-
 ---
 
 ### Task Description and Learning Goals
 
 Set the task description and learning goals for your live coding session by selecting two Markdown files when starting a new session.
-
-**Demo:**
-
-![Task Description and Learning Goals](https://media.githubusercontent.com/media/madbeamer/coducate-gifs/refs/heads/master/show_task_data.gif)
 
 ## Requirements
 
