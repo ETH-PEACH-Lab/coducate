@@ -139,15 +139,6 @@ export class SessionManager {
         // Load settings
         this.loadSettings();
 
-        // Sync initial files from each workspace folder (skip virtual folders like git SCM)
-        vscode.workspace.workspaceFolders?.forEach((folder) => {
-            if (folder.uri.scheme === "file") {
-                this.addAllFilesInWorkspaceFolder(
-                    this.toPosixPath(folder.uri.fsPath)
-                );
-            }
-        });
-
         const listenerDisposables = this.setupVSCodeListeners();
 
         // Track disposables for cleanup in the dispose method
@@ -155,9 +146,17 @@ export class SessionManager {
         this.disposables.push(...listenerDisposables);
         context.subscriptions.push(...this.disposables);
 
-        // Create bindings for documents that are already open (important after VS Code reload)
+        // After Yjs sync completes: add any disk-only files, create bindings, save dirty docs
         this.provider.on('sync', async (isSynced: boolean) => {
             if (isSynced) {
+                // Add files from disk that aren't already in Yjs (safe: addFileToYMap checks !fileYMap.has())
+                for (const folder of vscode.workspace.workspaceFolders ?? []) {
+                    if (folder.uri.scheme === "file") {
+                        await this.addAllFilesInWorkspaceFolder(
+                            this.toPosixPath(folder.uri.fsPath)
+                        );
+                    }
+                }
                 await this.createBindingsForOpenDocuments();
             }
         });
@@ -571,16 +570,6 @@ export class SessionManager {
                     // If changes exist, instructor must use diff view to accept/rollback
                     if (!this.changeTracker.hasChanges(relativePath)) {
                         this.changeTracker.recordInstructorEdit(relativePath, document.getText());
-                    } else {
-                        // Show warning that changes must be resolved first
-                        vscode.window.showWarningMessage(
-                            `'${relativePath}' has unresolved changes. Please use the diff view to accept or rollback changes.`,
-                            "Review Changes"
-                        ).then(choice => {
-                            if (choice === "Review Changes") {
-                                vscode.commands.executeCommand("coducate.reviewChanges");
-                            }
-                        });
                     }
                 }
             }),

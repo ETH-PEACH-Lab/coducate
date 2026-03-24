@@ -24,6 +24,8 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     private sessionName: string;
     private createdAt: string;
 
+    public readonly ready: Promise<void>;
+
     private _onDidWriteCoducateJson = new vscode.EventEmitter<string>();
     public readonly onDidWriteCoducateJson = this._onDidWriteCoducateJson.event;
 
@@ -47,7 +49,7 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
         );
 
         // Load notes on initialization
-        this.loadNotes();
+        this.ready = this.loadNotes();
     }
 
     public refresh() {
@@ -316,18 +318,26 @@ export class NotesCodeLensProvider implements vscode.CodeLensProvider {
     }
 
     private saveNotes() {
-        const key = `storedNotes-${this.roomId}`;
-        this.context.globalState.update(key, this.storedNotes);
+        const dir = this.context.globalStorageUri;
+        const fileUri = vscode.Uri.joinPath(dir, `storedNotes-${this.roomId}.json`);
+        vscode.workspace.fs.createDirectory(dir).then(() =>
+            vscode.workspace.fs.writeFile(fileUri, Buffer.from(JSON.stringify(this.storedNotes), "utf8"))
+        );
         this.writeCoducateJson();
     }
 
-    private loadNotes() {
-        const key = `storedNotes-${this.roomId}`;
-        const savedNotes = this.context.globalState.get<{
-            [filePath: string]: Note[];
-        }>(key, {});
+    private async loadNotes() {
+        const dir = this.context.globalStorageUri;
+        const fileUri = vscode.Uri.joinPath(dir, `storedNotes-${this.roomId}.json`);
+        let savedNotes: { [filePath: string]: Note[] } = {};
+        try {
+            const raw = await vscode.workspace.fs.readFile(fileUri);
+            savedNotes = JSON.parse(Buffer.from(raw).toString("utf8"));
+        } catch {
+            // No saved notes
+        }
 
-        if (!savedNotes) {
+        if (!savedNotes || Object.keys(savedNotes).length === 0) {
             this.storedNotes = {};
             return;
         }

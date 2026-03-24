@@ -1,7 +1,4 @@
 import * as vscode from "vscode";
-import * as os from "os";
-import * as path from "path";
-import * as fs from "fs/promises";
 import * as crypto from "crypto";
 import JSZip from "jszip";
 import {
@@ -14,14 +11,47 @@ import { SessionManager } from "./SessionManager";
 // import { CaptureTerminal } from "./CaptureTerminal";
 import { showTmpNotification } from "./tmpNotifications";
 
-// Key to store the room ID in the workspace state
-const ROOM_ID_KEY = "coducateRoomId";
-
 interface StoredSession {
     roomId: string;
     password: string;
     createdAt?: string;
     coducateJsonHash?: string;
+    active?: boolean;
+}
+
+// --- Session storage helpers (per-session globalState keys) ---
+
+function getSession(context: vscode.ExtensionContext, name: string): StoredSession | undefined {
+    return context.globalState.get<StoredSession>(`coducate-session-${name}`);
+}
+
+async function setSession(context: vscode.ExtensionContext, name: string, data: StoredSession): Promise<void> {
+    await context.globalState.update(`coducate-session-${name}`, data);
+}
+
+async function removeSession(context: vscode.ExtensionContext, name: string): Promise<void> {
+    const session = getSession(context, name);
+    await context.globalState.update(`coducate-session-${name}`, undefined);
+    if (session) {
+        const dir = context.globalStorageUri;
+        try { await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `storedNotes-${session.roomId}.json`)); } catch { /* ok */ }
+        try { await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, `changeTracker-${session.roomId}.json`)); } catch { /* ok */ }
+    }
+}
+
+function getAllSessions(context: vscode.ExtensionContext): Record<string, StoredSession> {
+    const prefix = "coducate-session-";
+    const result: Record<string, StoredSession> = {};
+    for (const key of context.globalState.keys()) {
+        if (key.startsWith(prefix)) {
+            const name = key.slice(prefix.length);
+            const session = context.globalState.get<StoredSession>(key);
+            if (session) {
+                result[name] = session;
+            }
+        }
+    }
+    return result;
 }
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -120,223 +150,99 @@ export async function activate(context: vscode.ExtensionContext) {
             });
     }
 
-    // Restore the previously opened workspace folders
-    const workspaceFolders: string[] | undefined = context.globalState.get(
-        "coducate.workspaceFolders"
-    );
-
-    if (workspaceFolders && workspaceFolders.length > 0) {
-        const foldersToAdd = workspaceFolders.map((folderUriString) => ({
-            uri: vscode.Uri.parse(folderUriString),
-        }));
-
-        vscode.workspace.updateWorkspaceFolders(
-            vscode.workspace.workspaceFolders
-                ? vscode.workspace.workspaceFolders.length
-                : 0,
-            null,
-            ...foldersToAdd
-        );
+    // Clean up legacy globalState keys (storedNotes, changeTracker, old migration keys)
+    // to free up space — these are no longer stored in globalState
+    for (const key of context.globalState.keys()) {
+        if (!key.startsWith("coducate-session-") && key !== "roomAccessMap") {
+            await context.globalState.update(key, undefined);
+        }
     }
 
-    // Restore the previously opened files (this is necessary due to the creation of a new workspace)
-    const tabGroupsState = context.globalState.get<
-        {
-            viewColumn: vscode.ViewColumn;
-            tabs: { label: string; isActive: boolean; uri: string }[];
-        }[]
-    >("coducate.tabGroupsState");
+    // Clean up legacy workspaceState (no longer used)
+    for (const key of context.workspaceState.keys()) {
+        await context.workspaceState.update(key, undefined);
+    }
 
-    if (tabGroupsState) {
+    // Restore session from .coducate.json → per-session globalState lookup
+    let currentSessionName: string | undefined;
+    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (wsRoot) {
         try {
-            // Restore tabs for each tab group
-            for (const group of tabGroupsState) {
-                let focusedTabUri: string | undefined;
+            const raw = await vscode.workspace.fs.readFile(
+                vscode.Uri.joinPath(wsRoot, ".coducate.json")
+            );
+            const parsed = JSON.parse(Buffer.from(raw).toString("utf8"));
+            if (parsed.name) {
+                const entry = getSession(context, parsed.name);
+                if (entry && entry.active !== false) {
+                    currentSessionName = parsed.name;
+                    const roomId = entry.roomId;
 
-                for (const tab of group.tabs) {
+                    let token: string | undefined;
                     try {
-                        // Restore files
-                        const document =
-                            await vscode.workspace.openTextDocument(
-                                vscode.Uri.parse(tab.uri)
-                            );
-                        await vscode.window.showTextDocument(document, {
-                            viewColumn: group.viewColumn,
-                            preview: false,
-                            preserveFocus: !tab.isActive,
-                        });
+                        token = await verifyPassword(
+                            getBackendHost(context),
+                            entry.password,
+                            roomId
+                        );
+                    } catch {
+                        // Server may be unreachable
+                    }
 
-                        // Mark the active tab for later focus
-                        if (tab.isActive) {
-                            focusedTabUri = tab.uri;
+                    if (!token) {
+                        vscode.window.showErrorMessage(
+                            "Failed to restore session: authentication failed."
+                        );
+                    } else {
+                        const sessionManagerFromInitailization = await initializeSession(
+                            context,
+                            roomId,
+                            token,
+                            status
+                        );
+
+                        if (!sessionManagerFromInitailization) {
+                            vscode.window.showErrorMessage(
+                                "Failed to restore the live coding session."
+                            );
+                        } else {
+                            sessionManager = sessionManagerFromInitailization;
+                            subscribeToCoducateJsonHash(
+                                context,
+                                sessionManager,
+                                parsed.name,
+                                entry.createdAt
+                            );
+
+                            const showRoomIdMessage = async (message: string) => {
+                                const copyToClipboard = await vscode.window.showInformationMessage(
+                                    message,
+                                    "Copy Room ID"
+                                );
+
+                                if (copyToClipboard === "Copy Room ID") {
+                                    await vscode.env.clipboard.writeText(roomId);
+                                    showTmpNotification("Room ID copied to clipboard.");
+                                }
+                            };
+
+                            showRoomIdMessage(`Live coding session restored. Room ID: ${roomId}`);
                         }
-                    } catch (error) {
-                        // Do not notify the user as this is not of critical importance
-                    }
-                }
-
-                // After all tabs in the group are opened, set focus to the active tab
-                if (focusedTabUri) {
-                    try {
-                        const focusedDocument =
-                            await vscode.workspace.openTextDocument(
-                                vscode.Uri.parse(focusedTabUri)
-                            );
-                        await vscode.window.showTextDocument(focusedDocument, {
-                            viewColumn: group.viewColumn,
-                            preview: false,
-                            preserveFocus: false,
-                        });
-                    } catch (error) {
-                        // Do not notify the user as this is not of critical importance
                     }
                 }
             }
-        } catch (error) {
-            vscode.window.showErrorMessage(
-                "An error occurred while restoring open editors."
-            );
-        }
-    }
-
-    // Restore session if a roomId exists
-    const roomId = context.workspaceState.get<string>(ROOM_ID_KEY);
-    if (roomId) {
-        // Look up stored password to re-authenticate and get a fresh token
-        const existingSessions =
-            context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
-
-        const sessionEntryPair = Object.entries(existingSessions).find(
-            ([, s]) => s.roomId === roomId
-        );
-        const sessionEntry = sessionEntryPair?.[1];
-        const sessionEntryName = sessionEntryPair?.[0] || "";
-
-        if (!sessionEntry) {
-            vscode.window.showErrorMessage(
-                "Failed to restore session: no stored credentials found."
-            );
-            await context.workspaceState.update(ROOM_ID_KEY, undefined);
-            return;
-        }
-
-        let token: string | undefined;
-        try {
-            token = await verifyPassword(
-                getBackendHost(context),
-                sessionEntry.password,
-                roomId
-            );
         } catch {
-            // Server may be unreachable — clear stale session
+            // No .coducate.json — no session to restore
         }
-
-        if (!token) {
-            vscode.window.showErrorMessage(
-                "Failed to restore session: authentication failed."
-            );
-            await context.workspaceState.update(ROOM_ID_KEY, undefined);
-            return;
-        }
-
-        const sessionManagerFromInitailization = await initializeSession(
-            context,
-            roomId,
-            token,
-            status
-        );
-
-        if (!sessionManagerFromInitailization) {
-            vscode.window.showErrorMessage(
-                "Failed to restore the live coding session."
-            );
-            return;
-        }
-
-        sessionManager = sessionManagerFromInitailization;
-        subscribeToCoducateJsonHash(
-            context,
-            sessionManager,
-            roomId,
-            sessionEntryName,
-            sessionEntry.createdAt
-        );
-
-        const showRoomIdMessage = async (message: string) => {
-            const copyToClipboard = await vscode.window.showInformationMessage(
-                message,
-                "Copy Room ID"
-            );
-
-            if (copyToClipboard === "Copy Room ID") {
-                await vscode.env.clipboard.writeText(roomId);
-                showTmpNotification("Room ID copied to clipboard.");
-            }
-        };
-
-        showRoomIdMessage(`Live coding session restored. Room ID: ${roomId}`);
     }
 
     // Register commands
     registerCommands(context, {
         sessionManager,
         status,
+        currentSessionName,
     });
 
-    // Outside-session edit warning: warn once per VS Code session if user edits
-    // files in a workspace that has .coducate.json but no active session
-    let outsideSessionWarningShown = false;
-    const outsideEditListener = vscode.workspace.onDidChangeTextDocument(
-        async () => {
-            if (outsideSessionWarningShown) {
-                return;
-            }
-
-            // Check if a session is active
-            const activeRoomId =
-                context.workspaceState.get<string>(ROOM_ID_KEY);
-            if (activeRoomId) {
-                return;
-            }
-
-            const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
-            if (!wsRoot) {
-                return;
-            }
-
-            try {
-                await vscode.workspace.fs.stat(
-                    vscode.Uri.joinPath(wsRoot, ".coducate.json")
-                );
-            } catch {
-                return; // No .coducate.json
-            }
-
-            outsideSessionWarningShown = true;
-            vscode.window.showWarningMessage(
-                "A .coducate.json file exists but no Coducate session is active. Editing files may make stored notes unusable. Start a session first.",
-                "OK"
-            );
-        }
-    );
-    context.subscriptions.push(outsideEditListener);
-
-    if (tabGroupsState && !workspaceFolders) {
-        // A new session was started so tabGroupsState is available but workspaceFolders is not
-        vscode.commands.executeCommand("coducate.startSession");
-        await context.globalState.update("coducate.tabGroupsState", undefined);
-        await context.globalState.update(
-            "coducate.workspaceFolders",
-            undefined
-        );
-    } else {
-        // The session was ended or the VS Code window was reloaded
-        await context.globalState.update("coducate.tabGroupsState", undefined);
-        await context.globalState.update(
-            "coducate.workspaceFolders",
-            undefined
-        );
-    }
 }
 
 /**
@@ -467,7 +373,6 @@ async function isRoomExisting(
 function subscribeToCoducateJsonHash(
     context: vscode.ExtensionContext,
     sessionManager: SessionManager,
-    roomId: string,
     sessionName: string,
     createdAt?: string
 ) {
@@ -478,17 +383,10 @@ function subscribeToCoducateJsonHash(
     }
 
     notesCodeLensProvider.onDidWriteCoducateJson((hash: string) => {
-        const sessions =
-            context.globalState.get<Record<string, StoredSession>>(
-                "coducate.sessions"
-            ) || {};
-        for (const session of Object.values(sessions)) {
-            if (session.roomId === roomId) {
-                session.coducateJsonHash = hash;
-                break;
-            }
+        const session = getSession(context, sessionName);
+        if (session && session.active !== false) {
+            setSession(context, sessionName, { ...session, coducateJsonHash: hash });
         }
-        context.globalState.update("coducate.sessions", sessions);
     });
 
     // Trigger an initial write
@@ -503,9 +401,42 @@ function registerCommands(
     deps: {
         sessionManager: SessionManager | undefined;
         status: vscode.StatusBarItem;
+        currentSessionName: string | undefined;
     }
 ) {
-    let { sessionManager, status } = deps;
+    let { sessionManager, status, currentSessionName } = deps;
+
+    // Outside-session edit warning: warn once per VS Code session if user edits
+    // files in a workspace that has .coducate.json but no active session
+    let outsideSessionWarningShown = false;
+    const outsideEditListener = vscode.workspace.onDidChangeTextDocument(
+        async () => {
+            if (outsideSessionWarningShown || sessionManager) {
+                return;
+            }
+
+            const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+            if (!wsRoot) {
+                return;
+            }
+
+            try {
+                await vscode.workspace.fs.stat(
+                    vscode.Uri.joinPath(wsRoot, ".coducate.json")
+                );
+            } catch {
+                return; // No .coducate.json
+            }
+
+            outsideSessionWarningShown = true;
+            vscode.window.showWarningMessage(
+                "A .coducate.json file exists but no Coducate session is active. Editing files may make stored notes unusable. Start a session first.",
+                "OK"
+            );
+        }
+    );
+    context.subscriptions.push(outsideEditListener);
+
     const startCommand = vscode.commands.registerCommand(
         "coducate.startSession",
         async () => {
@@ -517,84 +448,11 @@ function registerCommands(
                 return;
             }
 
-            // Check if the workspace is not stored (workspaceFile exists)
-            if (!vscode.workspace.workspaceFile) {
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (
-                    !workspaceFolders ||
-                    (workspaceFolders && workspaceFolders.length === 0)
-                ) {
-                    vscode.window.showErrorMessage(
-                        "No workspace folders found. Please add a folder to the workspace first."
-                    );
-                    return;
-                }
-
-                // Create a new workspace with the current folders and files
-                if (workspaceFolders) {
-                    const workspaceContent = {
-                        folders: workspaceFolders.map((folder) => ({
-                            uri: folder.uri.toString(),
-                        })),
-                        settings: {},
-                    };
-
-                    try {
-                        // Capture all file tabs in tab groups
-                        const tabGroupsState = vscode.window.tabGroups.all.map(
-                            (group) => ({
-                                viewColumn: group.viewColumn,
-                                tabs: group.tabs
-                                    .filter(
-                                        (tab) =>
-                                            tab.input instanceof
-                                            vscode.TabInputText
-                                    ) // Only capture files
-                                    .map((tab) => ({
-                                        label: tab.label,
-                                        isActive: tab.isActive,
-                                        uri: (
-                                            tab.input as vscode.TabInputText
-                                        ).uri.toString(),
-                                    })),
-                            })
-                        );
-
-                        // // Save tab and terminal state in globalState
-                        await context.globalState.update(
-                            "coducate.tabGroupsState",
-                            tabGroupsState
-                        );
-
-                        // Write the workspace configurations to a temporary file
-                        const tempDir = os.tmpdir();
-                        const workspacePath = path.join(
-                            tempDir,
-                            `coducate-${Date.now()}.code-workspace`
-                        );
-
-                        await fs.writeFile(
-                            workspacePath,
-                            JSON.stringify(workspaceContent, null, 2)
-                        );
-
-                        await vscode.commands.executeCommand(
-                            "vscode.openFolder",
-                            vscode.Uri.file(workspacePath),
-                            false
-                        );
-                    } catch {
-                        vscode.window.showErrorMessage(
-                            "Failed to save the workspace. Try starting the session again."
-                        );
-                        return;
-                    }
-                } else {
-                    vscode.window.showErrorMessage(
-                        "Failed to save the workspace. Try starting the session again."
-                    );
-                    return;
-                }
+            if (!vscode.workspace.workspaceFolders?.length) {
+                vscode.window.showErrorMessage(
+                    "No workspace folders found. Please add a folder to the workspace first."
+                );
+                return;
             }
 
             // Check if .coducate.json exists in the workspace root (session package)
@@ -661,8 +519,7 @@ function registerCommands(
                 return;
             }
 
-            const existingSessions =
-                context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
+            const existingSessions = getAllSessions(context);
 
             if (sessionType.value === "New Session") {
                 // Hard limit: 100 sessions per user
@@ -725,22 +582,9 @@ function registerCommands(
                                     // Best effort
                                 }
 
-                                // Remove stored notes
-                                const notesKey = `storedNotes-${sessionData.roomId}`;
-                                await context.globalState.update(
-                                    notesKey,
-                                    undefined
-                                );
-
-                                // Remove from local storage
-                                delete existingSessions[session.label];
+                                await removeSession(context, session.label);
                             }
                         }
-
-                        await context.globalState.update(
-                            "coducate.sessions",
-                            existingSessions
-                        );
 
                         showTmpNotification(
                             `Deleted ${deleteOld.length} old session(s).`
@@ -948,10 +792,6 @@ function registerCommands(
                         // End the session if the task description fails to load
                         sessionManager.dispose();
                         sessionManager = undefined;
-                        await context.workspaceState.update(
-                            ROOM_ID_KEY,
-                            undefined
-                        );
 
                         return;
                     }
@@ -973,28 +813,19 @@ function registerCommands(
                         // End the session if the learning goals fail to load
                         sessionManager.dispose();
                         sessionManager = undefined;
-                        await context.workspaceState.update(
-                            ROOM_ID_KEY,
-                            undefined
-                        );
 
                         return;
                     }
                 }
 
-                // Store the mapping of session name to room ID and password
-                existingSessions[sessionName] = {
+                // Store the session
+                await setSession(context, sessionName, {
                     roomId: newRoomId,
                     password,
                     createdAt: new Date().toISOString(),
-                };
-
-                await context.globalState.update(
-                    "coducate.sessions",
-                    existingSessions
-                );
-
-                await context.workspaceState.update(ROOM_ID_KEY, newRoomId);
+                    active: true,
+                });
+                currentSessionName = sessionName;
 
                 const showRoomIdMessage = async (message: string) => {
                     const copyToClipboard =
@@ -1059,7 +890,6 @@ function registerCommands(
                 subscribeToCoducateJsonHash(
                     context,
                     sessionManager,
-                    newRoomId,
                     sessionName
                 );
             } else if (sessionType.value === "Existing Session") {
@@ -1169,12 +999,14 @@ function registerCommands(
                 subscribeToCoducateJsonHash(
                     context,
                     sessionManager,
-                    roomId,
                     selectedSessionName,
                     existingSessions[selectedSessionName].createdAt
                 );
 
-                await context.workspaceState.update(ROOM_ID_KEY, roomId);
+                // Mark session as active
+                existingSessions[selectedSessionName].active = true;
+                await setSession(context, selectedSessionName, existingSessions[selectedSessionName]);
+                currentSessionName = selectedSessionName;
 
                 const showRoomIdMessage = async (message: string) => {
                     const copyToClipboard =
@@ -1211,8 +1043,18 @@ function registerCommands(
         "coducate.endSession",
         async () => {
             if (sessionManager) {
-                // Save all open files before ending the session
-                await vscode.workspace.saveAll();
+                // Check for unresolved changes
+                const filesWithChanges = sessionManager.getChangeTracker().getFilesWithChanges();
+                if (filesWithChanges.length > 0) {
+                    const choice = await vscode.window.showWarningMessage(
+                        `There are ${filesWithChanges.length} file(s) with unresolved changes. Please resolve them before ending the session.`,
+                        "Review Changes"
+                    );
+                    if (choice === "Review Changes") {
+                        vscode.commands.executeCommand("coducate.reviewChanges");
+                    }
+                    return;
+                }
 
                 // Notify backend to end the session (best effort)
                 try {
@@ -1227,81 +1069,26 @@ function registerCommands(
                     // Best effort -- backend cleanup will handle it via DB hygiene
                 }
 
+                // Mark session as inactive BEFORE dispose
+                // (dispose can trigger async callbacks that overwrite globalState)
+                if (currentSessionName) {
+                    const sessionEntry = getSession(context, currentSessionName);
+                    if (sessionEntry) {
+                        sessionEntry.active = false;
+                        await setSession(context, currentSessionName, sessionEntry);
+                    }
+                }
+
                 // Clear change tracker state so stale snapshots don't persist across sessions
                 sessionManager.getChangeTracker().clear();
 
                 sessionManager.dispose();
                 sessionManager = undefined;
-                await context.workspaceState.update(ROOM_ID_KEY, undefined);
+                currentSessionName = undefined;
+
                 status.text = "$(sync-ignored) Coducate";
 
                 showTmpNotification("Live coding session ended.");
-
-                // If the current workspace is non-existent, untitled or not created by Coducate, do nothing
-                if (
-                    !vscode.workspace.workspaceFile ||
-                    vscode.workspace.workspaceFile.scheme === "untitled" ||
-                    !/coducate-\d+\.code-workspace$/.test(
-                        vscode.workspace.workspaceFile.fsPath
-                    )
-                ) {
-                    return;
-                }
-
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-
-                // Capture all file tabs in tab groups
-                const tabGroupsState = vscode.window.tabGroups.all.map(
-                    (group) => ({
-                        viewColumn: group.viewColumn,
-                        tabs: group.tabs
-                            .filter(
-                                (tab) =>
-                                    tab.input instanceof vscode.TabInputText
-                            ) // Only capture files
-                            .map((tab) => ({
-                                label: tab.label,
-                                isActive: tab.isActive,
-                                uri: (
-                                    tab.input as vscode.TabInputText
-                                ).uri.toString(),
-                            })),
-                    })
-                );
-
-                // Save workspace folders state in globalState
-                if (workspaceFolders) {
-                    const folderUris = workspaceFolders.map((folder) =>
-                        folder.uri.toString()
-                    );
-                    context.globalState.update(
-                        "coducate.workspaceFolders",
-                        folderUris
-                    );
-                }
-
-                // Save tab and terminal state in globalState
-                await context.globalState.update(
-                    "coducate.tabGroupsState",
-                    tabGroupsState
-                );
-
-                if (vscode.workspace.workspaceFile) {
-                    // Use closeFolder to remove the workspace
-                    await vscode.commands.executeCommand(
-                        "workbench.action.closeFolder"
-                    );
-                }
-
-                // Open a new VS Code window
-                await vscode.commands.executeCommand(
-                    "workbench.action.newWindow"
-                );
-
-                // Close the current VS Code window
-                await vscode.commands.executeCommand(
-                    "workbench.action.closeWindow"
-                );
             } else {
                 vscode.window.showErrorMessage("No active session found.");
             }
@@ -1312,8 +1099,7 @@ function registerCommands(
         "coducate.manageSessions",
         async () => {
             // Retrieve the stored session name-to-room ID-password mappings
-            let existingSessions =
-                context.globalState.get<Record<string, StoredSession>>("coducate.sessions") || {};
+            let existingSessions = getAllSessions(context);
 
             if (Object.keys(existingSessions).length === 0) {
                 showTmpNotification("No sessions available to manage.");
@@ -1321,6 +1107,9 @@ function registerCommands(
             }
 
             while (true) {
+                // Re-read sessions (may have changed after rename/delete)
+                existingSessions = getAllSessions(context);
+
                 // Convert sessions to a displayable list
                 const sessionChoices = Object.entries(existingSessions).map(
                     ([name, { roomId }]) => ({
@@ -1330,7 +1119,6 @@ function registerCommands(
                 );
 
                 if (sessionChoices.length === 0) {
-                    showTmpNotification("All sessions have been deleted.");
                     return;
                 }
 
@@ -1409,15 +1197,14 @@ function registerCommands(
                         continue;
                     }
 
-                    // Rename the session
+                    // Rename the session (remove old key without cleaning up associated data)
                     const sessionData = existingSessions[selectedSessionName];
-                    delete existingSessions[selectedSessionName];
-                    existingSessions[newSessionName] = sessionData;
+                    await context.globalState.update(`coducate-session-${selectedSessionName}`, undefined);
+                    await setSession(context, newSessionName, sessionData);
 
-                    await context.globalState.update(
-                        "coducate.sessions",
-                        existingSessions
-                    );
+                    if (currentSessionName === selectedSessionName) {
+                        currentSessionName = newSessionName;
+                    }
 
                     showTmpNotification(
                         `Session '${selectedSessionName}' renamed to '${newSessionName}'.`
@@ -1459,16 +1246,8 @@ function registerCommands(
                             // Best effort
                         }
 
-                        // Delete the stored notes for the session
-                        const notesKey = `storedNotes-${sessionData.roomId}`;
-                        await context.globalState.update(notesKey, undefined);
-
-                        // Delete the selected session locally
-                        delete existingSessions[selectedSessionName];
-                        await context.globalState.update(
-                            "coducate.sessions",
-                            existingSessions
-                        );
+                        // Delete session and associated data
+                        await removeSession(context, selectedSessionName);
 
                         showTmpNotification(
                             `Session '${selectedSessionName}' deleted.`

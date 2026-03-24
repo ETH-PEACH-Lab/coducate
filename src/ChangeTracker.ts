@@ -19,6 +19,8 @@ export class ChangeTracker {
     private disposables: vscode.Disposable[] = [];
     private getFileUriCallback?: (relativePath: string) => Promise<vscode.Uri | null>;
 
+    public readonly ready: Promise<void>;
+
     constructor(
         context: vscode.ExtensionContext,
         roomId: string,
@@ -27,9 +29,8 @@ export class ChangeTracker {
         this.context = context;
         this.roomId = roomId;
         this.statusBarItem = statusBarItem;
-        
-        this.loadState();
-        this.updateStatusBar();
+
+        this.ready = this.loadState().then(() => this.updateStatusBar());
         this.registerCommands();
     }
 
@@ -305,23 +306,29 @@ export class ChangeTracker {
     }
 
     private saveState() {
-        const key = `changeTracker-${this.roomId}`;
-        this.context.workspaceState.update(key, {
+        const dir = this.context.globalStorageUri;
+        const fileUri = vscode.Uri.joinPath(dir, `changeTracker-${this.roomId}.json`);
+        const data = {
             instructorSnapshots: Array.from(this.instructorSnapshots.entries()),
             filesWithChanges: Array.from(this.filesWithChanges)
-        });
+        };
+        vscode.workspace.fs.createDirectory(dir).then(() =>
+            vscode.workspace.fs.writeFile(fileUri, Buffer.from(JSON.stringify(data), "utf8"))
+        );
     }
 
-    private loadState() {
-        const key = `changeTracker-${this.roomId}`;
-        const saved = this.context.workspaceState.get<{
-            instructorSnapshots: [string, string][];
-            filesWithChanges: string[];
-        }>(key);
-
-        if (saved) {
-            this.instructorSnapshots = new Map(saved.instructorSnapshots);
-            this.filesWithChanges = new Set(saved.filesWithChanges);
+    private async loadState() {
+        const dir = this.context.globalStorageUri;
+        const fileUri = vscode.Uri.joinPath(dir, `changeTracker-${this.roomId}.json`);
+        try {
+            const raw = await vscode.workspace.fs.readFile(fileUri);
+            const saved = JSON.parse(Buffer.from(raw).toString("utf8"));
+            if (saved) {
+                this.instructorSnapshots = new Map(saved.instructorSnapshots);
+                this.filesWithChanges = new Set(saved.filesWithChanges);
+            }
+        } catch {
+            // No saved state
         }
     }
 
