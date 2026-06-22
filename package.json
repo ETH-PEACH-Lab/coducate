@@ -11,6 +11,10 @@
         "theme": "dark"
     },
     "homepage": "https://coducate.live",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/madbeamer/coducate.git"
+    },
     "author": {
         "name": "Lukas Mast",
         "email": "lukasmast07@gmail.com",
