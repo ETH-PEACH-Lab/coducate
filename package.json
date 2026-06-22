@@ -2,7 +2,7 @@
     "name": "coducate",
     "displayName": "Coducate",
     "description": "Streamlines Instructor-Led Live Coding",
-    "version": "0.8.0",
+    "version": "0.8.1",
     "license": "AGPL-3.0-or-later",
     "publisher": "coducate",
     "icon": "public/coducate-logo.png",
