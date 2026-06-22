@@ -1,5 +1,23 @@
 # Change Log
 
+## [0.8.0] - 2026-06-22
+
+### Added
+
+-   Added a Coducate Control Panel in the Activity Bar sidebar with clickable buttons for all commands, grouped by category (Session, Access Control, Terminal, Web View, Appearance, Notes, Session Data). All commands remain available via the command palette.
+
+### Changed
+
+-   Starting a session no longer creates a temporary workspace file. Sessions now run directly in the open folder, removing the disruptive window reload when starting or ending a session.
+-   Ending a session no longer closes and reopens the VS Code window. The session simply ends in-place.
+-   Ending a session is now blocked if there are unresolved web client changes. A warning with a "Review Changes" button is shown instead.
+
+### Fixed
+
+-   Fixed sessions intermittently failing to persist, caused by VS Code's internal storage size limit (approx. 1.5 MB) being exceeded
+-   Fixed second session not being saved when using multiple VS Code windows simultaneously
+-   Fixed files appearing empty or corrupted after restoring a session, caused by files being added before synchronization completed
+
 ## [0.7.0] - 2026-03-04
 
 ### Added
