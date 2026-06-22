@@ -1,5 +1,11 @@
 # Change Log
 
+## [0.8.2] - 2026-06-22
+
+### Changed
+
+-   Updated the repository URL in the extension manifest
+
 ## [0.8.1] - 2026-06-22
 
 ### Added
