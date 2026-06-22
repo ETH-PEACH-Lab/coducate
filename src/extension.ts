@@ -8,8 +8,8 @@ import {
     animals,
 } from "unique-names-generator";
 import { SessionManager } from "./SessionManager";
-// import { CaptureTerminal } from "./CaptureTerminal";
 import { showTmpNotification } from "./tmpNotifications";
+import { CoducateControlPanelProvider } from "./CoducateControlPanelProvider";
 
 interface StoredSession {
     roomId: string;
@@ -66,6 +66,14 @@ export async function activate(context: vscode.ExtensionContext) {
     status.color = "#fff";
     status.show();
     context.subscriptions.push(status);
+
+    // Create the control panel sidebar
+    const controlPanelProvider = new CoducateControlPanelProvider();
+    const treeView = vscode.window.createTreeView("coducateControlPanel", {
+        treeDataProvider: controlPanelProvider,
+        showCollapseAll: false,
+    });
+    context.subscriptions.push(treeView);
 
     // Prompt to enable diffEditor.codeLens setting
     const diffEditorConfig = vscode.workspace.getConfiguration("diffEditor");
@@ -227,6 +235,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             };
 
                             showRoomIdMessage(`Live coding session restored. Room ID: ${roomId}`);
+                            controlPanelProvider.setSessionActive(true);
                         }
                     }
                 }
@@ -241,6 +250,7 @@ export async function activate(context: vscode.ExtensionContext) {
         sessionManager,
         status,
         currentSessionName,
+        controlPanelProvider,
     });
 
 }
@@ -402,9 +412,11 @@ function registerCommands(
         sessionManager: SessionManager | undefined;
         status: vscode.StatusBarItem;
         currentSessionName: string | undefined;
+        controlPanelProvider: CoducateControlPanelProvider;
     }
 ) {
     let { sessionManager, status, currentSessionName } = deps;
+    const { controlPanelProvider } = deps;
 
     // Outside-session edit warning: warn once per VS Code session if user edits
     // files in a workspace that has .coducate.json but no active session
@@ -773,6 +785,7 @@ function registerCommands(
                 }
 
                 sessionManager = sessionManagerFromInitailization;
+                controlPanelProvider.setSessionActive(true);
 
                 if (taskDescriptionPath) {
                     try {
@@ -792,6 +805,7 @@ function registerCommands(
                         // End the session if the task description fails to load
                         sessionManager.dispose();
                         sessionManager = undefined;
+                        controlPanelProvider.setSessionActive(false);
 
                         return;
                     }
@@ -813,6 +827,7 @@ function registerCommands(
                         // End the session if the learning goals fail to load
                         sessionManager.dispose();
                         sessionManager = undefined;
+                        controlPanelProvider.setSessionActive(false);
 
                         return;
                     }
@@ -996,6 +1011,7 @@ function registerCommands(
                 }
 
                 sessionManager = sessionManagerFromInitailization;
+                controlPanelProvider.setSessionActive(true);
                 subscribeToCoducateJsonHash(
                     context,
                     sessionManager,
@@ -1085,6 +1101,7 @@ function registerCommands(
                 sessionManager.dispose();
                 sessionManager = undefined;
                 currentSessionName = undefined;
+                controlPanelProvider.setSessionActive(false);
 
                 status.text = "$(sync-ignored) Coducate";
 
@@ -1729,46 +1746,6 @@ function registerCommands(
         }
     );
 
-    // Old pseudo terminal implementation using bash (only works with WSL for windows)
-    // const emulateTerminalCommand = vscode.commands.registerCommand(
-    //     "coducate.emulateTerminal",
-    //     async () => {
-    //         if (!sessionManager) {
-    //             vscode.window.showErrorMessage(
-    //                 "No active session found. Please start a session first."
-    //             );
-    //             return;
-    //         }
-
-    //         const editor = vscode.window.activeTextEditor;
-    //         if (!editor) {
-    //             vscode.window.showErrorMessage("No active editor to run code.");
-    //             return;
-    //         }
-
-    //         // Check if OS is Windows
-    //         const isWindows = os.platform() === "win32";
-    //         const runningProcess = isWindows ? "WSL (Bash)" : "Bash";
-
-    //         const task = new vscode.Task(
-    //             { type: "runBash" },
-    //             vscode.TaskScope.Workspace,
-    //             `Running ${runningProcess}`,
-    //             "Emulated Terminal",
-    //             new vscode.CustomExecution(
-    //                 async (): Promise<vscode.Pseudoterminal> =>
-    //                     new CaptureTerminal(sessionManager!)
-    //             ),
-    //             []
-    //         );
-
-    //         vscode.tasks.executeTask(task);
-
-    //         // Request the terminal to open
-    //         vscode.commands.executeCommand("coducate.openTerminal");
-    //     }
-    // );
-
     // Command to request terminal open
     const requestTerminalOpenCommand = vscode.commands.registerCommand(
         "coducate.openTerminal",
@@ -2098,6 +2075,110 @@ function registerCommands(
                 vscode.window.showErrorMessage(
                     error instanceof Error ? error.message : String(error)
                 );
+            }
+        }
+    );
+
+    // Direct font size commands (used by Control Panel)
+    const increaseFontSizeCommand = vscode.commands.registerCommand(
+        "coducate.increaseFontSize",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No active session found. Please start a session first.");
+                return;
+            }
+            try {
+                await sessionManager.sendWebSocketRequest(
+                    "change_font_size_request",
+                    { roomId: sessionManager.getRoomId(), increase: true },
+                    {
+                        responseType: "change_font_size_response",
+                        validateResponse: (payload) => payload.roomId === sessionManager?.getRoomId(),
+                        timeoutMessage: "Change font size request timed out.",
+                        waitForOpen: false,
+                    }
+                );
+                showTmpNotification("Font size successfully increased.");
+            } catch (error) {
+                vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+            }
+        }
+    );
+
+    const decreaseFontSizeCommand = vscode.commands.registerCommand(
+        "coducate.decreaseFontSize",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No active session found. Please start a session first.");
+                return;
+            }
+            try {
+                await sessionManager.sendWebSocketRequest(
+                    "change_font_size_request",
+                    { roomId: sessionManager.getRoomId(), increase: false },
+                    {
+                        responseType: "change_font_size_response",
+                        validateResponse: (payload) => payload.roomId === sessionManager?.getRoomId(),
+                        timeoutMessage: "Change font size request timed out.",
+                        waitForOpen: false,
+                    }
+                );
+                showTmpNotification("Font size successfully decreased.");
+            } catch (error) {
+                vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+            }
+        }
+    );
+
+    // Direct theme commands (used by Control Panel)
+    const setLightThemeCommand = vscode.commands.registerCommand(
+        "coducate.setLightTheme",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No active session found. Please start a session first.");
+                return;
+            }
+            try {
+                await sessionManager.sendWebSocketRequest(
+                    "change_theme_request",
+                    { changedTheme: "light", roomId: sessionManager.getRoomId() },
+                    {
+                        responseType: "change_theme_response",
+                        validateResponse: (payload) =>
+                            payload.roomId === sessionManager?.getRoomId() && payload.changedTheme === "light",
+                        timeoutMessage: "Change theme request timed out.",
+                        waitForOpen: false,
+                    }
+                );
+                showTmpNotification("Theme successfully changed to light mode.");
+            } catch (error) {
+                vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+            }
+        }
+    );
+
+    const setDarkThemeCommand = vscode.commands.registerCommand(
+        "coducate.setDarkTheme",
+        async () => {
+            if (!sessionManager) {
+                vscode.window.showErrorMessage("No active session found. Please start a session first.");
+                return;
+            }
+            try {
+                await sessionManager.sendWebSocketRequest(
+                    "change_theme_request",
+                    { changedTheme: "dark", roomId: sessionManager.getRoomId() },
+                    {
+                        responseType: "change_theme_response",
+                        validateResponse: (payload) =>
+                            payload.roomId === sessionManager?.getRoomId() && payload.changedTheme === "dark",
+                        timeoutMessage: "Change theme request timed out.",
+                        waitForOpen: false,
+                    }
+                );
+                showTmpNotification("Theme successfully changed to dark mode.");
+            } catch (error) {
+                vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
             }
         }
     );
@@ -2471,6 +2552,10 @@ function registerCommands(
         requestHideRoomIdCommand,
         changeFontSizeCommand,
         changeThemeCommand,
+        increaseFontSizeCommand,
+        decreaseFontSizeCommand,
+        setLightThemeCommand,
+        setDarkThemeCommand,
         createNotesCommand,
         handleNoteActionCommand,
         removeNoteCommand,

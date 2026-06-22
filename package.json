@@ -45,6 +45,24 @@
     ],
     "main": "./dist/extension.js",
     "contributes": {
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "coducate-panel",
+                    "title": "Coducate",
+                    "icon": "public/coducate-logo.png"
+                }
+            ]
+        },
+        "views": {
+            "coducate-panel": [
+                {
+                    "id": "coducateControlPanel",
+                    "name": "Control Panel",
+                    "icon": "public/coducate-logo.png"
+                }
+            ]
+        },
         "configuration": {
             "type": "object",
             "title": "Coducate",
@@ -158,6 +176,22 @@
                 "title": "Coducate: Change Theme"
             },
             {
+                "command": "coducate.increaseFontSize",
+                "title": "Coducate: Increase Font Size"
+            },
+            {
+                "command": "coducate.decreaseFontSize",
+                "title": "Coducate: Decrease Font Size"
+            },
+            {
+                "command": "coducate.setLightTheme",
+                "title": "Coducate: Light Theme"
+            },
+            {
+                "command": "coducate.setDarkTheme",
+                "title": "Coducate: Dark Theme"
+            },
+            {
                 "command": "coducate.createNote",
                 "title": "Coducate: Create Note"
             },
@@ -172,6 +206,10 @@
             {
                 "command": "coducate.exportSession",
                 "title": "Coducate: Export Session"
+            },
+            {
+                "command": "coducate.reviewChanges",
+                "title": "Coducate: Review Changes"
             }
         ],
         "terminal": {

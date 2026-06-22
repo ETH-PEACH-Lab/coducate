@@ -4,6 +4,22 @@
 
 ## Features and Commands
 
+### Control Panel
+
+Access all Coducate commands from the **Coducate Control Panel** in the Activity Bar sidebar, without needing the command palette. Commands are organized into groups:
+
+-   **Session** — Start, end, and manage sessions
+-   **Access Control** — Grant or revoke participant write access
+-   **Terminal** — Create a Coducate Terminal
+-   **Web View** — Toggle explorer, terminal, and room ID in the web view
+-   **Appearance** — Change font size and theme
+-   **Notes** — Create notes, remove notes, toggle suggestions
+-   **Session Data** — Export session, review changes
+
+When no session is active, only Session commands are shown. All commands are also available via the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
+
+---
+
 ### Start and End Live Sessions
 
 Effortlessly begin or end your live coding sessions with Coducate.
