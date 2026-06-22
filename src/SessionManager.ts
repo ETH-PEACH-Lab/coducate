@@ -23,6 +23,7 @@ export class SessionManager {
     private terminalShellIntegration: TerminalShellIntegration;
     private status: vscode.StatusBarItem;
     private disposables: vscode.Disposable[] = [];
+    private isDisposed = false;
     private isFlushing = false; // Flag to prevent multiple flushes
     private pendingRequests: Array<() => void> = []; // Store requests that are waiting for WebSocket to open
     private pendingResponses: Record<
@@ -233,12 +234,16 @@ export class SessionManager {
         };
 
         const handleClose = () => {
-            // Set status bar to not synchronized
+            if (this.isDisposed) {
+                return;
+            }
             this.status.text = "$(debug-disconnect) Coducate";
         };
 
         const handleError = (errorEvent: ErrorEvent) => {
-            // Set status bar to not synchronized
+            if (this.isDisposed) {
+                return;
+            }
             this.status.text = "$(debug-disconnect) Coducate";
         };
 
@@ -1613,6 +1618,7 @@ export class SessionManager {
      */
 
     public dispose() {
+        this.isDisposed = true;
         // Dispose all bindings
         for (const binding of this.ytextBindings.values()) {
             binding.dispose();
