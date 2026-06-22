@@ -1,5 +1,12 @@
 # Change Log
 
+## [0.8.1] - 2026-06-22
+
+### Added
+
+-   Open-sourced Coducate under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
+-   Added a link to the public source code repository in the extension manifest.
+
 ## [0.8.0] - 2026-06-22
 
 ### Added
