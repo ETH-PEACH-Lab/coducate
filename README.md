@@ -227,3 +227,7 @@ Coducate includes the following default keybindings:
     2. Find the line with `ZSH_THEME="powerlevel10k/powerlevel10k"` (or similar)
     3. Change to a simpler theme: `ZSH_THEME="robbyrussell"`
     4. Reload your configuration: `source ~/.zshrc`
+
+## License
+
+[GNU Affero General Public License v3.0 or later](LICENSE)
